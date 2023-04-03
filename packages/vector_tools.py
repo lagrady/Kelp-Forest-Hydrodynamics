@@ -159,10 +159,11 @@ def datfile_to_ds(datfile, vhdfile, fs):
     # Fixable failure (excluding checksum and correlation)= 36
     # Fixable failure (with acceptable correlations) = 41
     # Complete failure = 42
-    # 
     # Tests performed on the recorded velocity and pressure data found on the .dat file
     
     dat_flag = xr.zeros_like(ds.East) # Same shape as .dat data arrays
+    pw_flag = xr.zeros_like(dat_flag)
+    qartod_flag = xr.zeros_like(dat_flag)
     
     burst_diff = np.diff(ds.Burst_number, axis = 0, prepend = 0)
     burst_diff[0] = 0
@@ -170,26 +171,23 @@ def datfile_to_ds(datfile, vhdfile, fs):
     min_depth = np.int(np.mean(ds.Pressure) - np.std(ds.Pressure))
     
     # Checksum tests 
-    dat_flag = dat_flag + xr.where(ds.Checksum == 0, 0, 42)
+    dat_flag = dat_flag + xr.where(ds.Checksum == 0, 0, 61)
     
     # Pressure test
-    dat_flag = dat_flag + xr.where(ds.Pressure >= min_depth, 0, 42)
+    dat_flag = dat_flag + xr.where(ds.Pressure >= min_depth, 0, 61)
     
     # Beam correlation/SNR test
     dat_flag = dat_flag + xr.where((ds.Correlation_B1 > 70), 0, 0) # Full pass condition
-    dat_flag = dat_flag + xr.where((ds.Correlation_B1 <= 70) & (ds.Correlation_B1 > 60), 1, 0) # Not ideal but acceptable
-    dat_flag = dat_flag + xr.where((ds.Correlation_B1 <= 60) & (ds.Correlation_B1 > 50), 3, 0) # Suspect, but not a full failure
-    dat_flag = dat_flag + xr.where((ds.Correlation_B1 <= 50), 42, 0) # Full failure and should be uniquely flagged to identify in analysis
+    dat_flag = dat_flag + xr.where((ds.Correlation_B1 <= 70) & (ds.Correlation_B1 > 50), 3, 0) # Not ideal but acceptable
+    dat_flag = dat_flag + xr.where((ds.Correlation_B1 <= 50), 61, 0) # Full failure and should be uniquely flagged to identify in analysis
     
     dat_flag = dat_flag + xr.where((ds.Correlation_B2 > 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B2 <= 70) & (ds.Correlation_B2 > 60), 1, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B2 <= 60) & (ds.Correlation_B2 > 50), 3, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B2 <= 50), 42, 0) 
+    dat_flag = dat_flag + xr.where((ds.Correlation_B2 <= 70) & (ds.Correlation_B2 > 50), 3, 0) 
+    dat_flag = dat_flag + xr.where((ds.Correlation_B2 <= 50), 61, 0) 
     
     dat_flag = dat_flag + xr.where((ds.Correlation_B3 > 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B3 <= 70) & (ds.Correlation_B3 > 60), 1, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B3 <= 60) & (ds.Correlation_B3 > 50), 3, 0) 
-    dat_flag = dat_flag + xr.where((ds.Correlation_B3 <= 50), 42, 0) 
+    dat_flag = dat_flag + xr.where((ds.Correlation_B3 <= 70) & (ds.Correlation_B3 > 50), 3, 0) 
+    dat_flag = dat_flag + xr.where((ds.Correlation_B3 <= 50), 61, 0) 
     
     # Horizontal velocity test
     # For East-West
@@ -210,7 +208,9 @@ def datfile_to_ds(datfile, vhdfile, fs):
     # For East-west (u)
     du = np.diff(ds.East, axis = 0, prepend = 0) 
     du[0] = 0
-    dat_flag = dat_flag + xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0) 
+    dat_flag = dat_flag + xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0)
+    pw_flag = pw_flag + xr.where((np.abs(du) >= 2) & (burst_diff==0), 1, 0)
+    
     dat_flag = dat_flag + xr.where((np.abs(du) < 2) & (np.abs(du) >= 1) & (burst_diff==0), 3, 0)
     dat_flag = dat_flag + xr.where((np.abs(du) < 1) & (np.abs(du) >= .25) & (burst_diff==0), 1, 0) 
 
@@ -218,6 +218,8 @@ def datfile_to_ds(datfile, vhdfile, fs):
     dv = np.diff(ds.North, axis = 0, prepend = 0) 
     dv[0] = 0
     dat_flag = dat_flag + xr.where((np.abs(dv) >= 2) & (burst_diff==0), 4, 0) 
+    pw_flag = pw_flag + xr.where((np.abs(dv) >= 2) & (burst_diff==0), 1, 0)
+    
     dat_flag = dat_flag + xr.where((np.abs(dv) < 2) & (np.abs(dv) >= 1) & (burst_diff==0), 3, 0)
     dat_flag = dat_flag + xr.where((np.abs(dv) < 1) & (np.abs(dv) >= .25) & (burst_diff==0), 1, 0)
 
@@ -225,6 +227,8 @@ def datfile_to_ds(datfile, vhdfile, fs):
     dw = np.diff(ds.Vertical, axis = 0, prepend = 0) 
     dw[0] = 0
     dat_flag = dat_flag + xr.where((np.abs(dw) >= 1) & (burst_diff==0), 4, 0) # Magnitudes of vertical velocity are typically smaller than horizontal velocity, so thresholds are reduced
+    pw_flag = pw_flag + xr.where((np.abs(dw) >= 1) & (burst_diff==0), 1, 0)
+    
     dat_flag = dat_flag + xr.where((np.abs(dw) < 1) & (np.abs(dw) >= .5) & (burst_diff==0), 3, 0) 
     dat_flag = dat_flag + xr.where((np.abs(dw) < .5) & (np.abs(dw) >= .15) & (burst_diff==0), 1, 0)
     
@@ -235,6 +239,8 @@ def datfile_to_ds(datfile, vhdfile, fs):
     dCSPD = np.diff(ds.CSPD, axis = 0, prepend = 0)
     dCSPD[0] = 0
     dat_flag = dat_flag + xr.where((np.abs(dCSPD) >= 4) & (burst_diff==0), 4, 0)
+    pw_flag = pw_flag + xr.where((np.abs(dCSPD) >= 4) & (burst_diff==0), 1, 0)
+    
     dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 4) & (np.abs(dCSPD) >= 1) & (burst_diff==0), 3, 0)
     dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 1) & (np.abs(dCSPD) >= .25) & (burst_diff==0), 1, 0)
 
@@ -242,12 +248,26 @@ def datfile_to_ds(datfile, vhdfile, fs):
     dCDIR = np.diff(ds.CDIR, axis = 0, prepend = 0)
     dCDIR[0] = dCDIR[0] - dCDIR[0]
     dat_flag = dat_flag + xr.where((np.abs(dCDIR) >= 135) & (np.abs(dCDIR) <= 225)& (burst_diff==0), 4, 0)
+    pw_flag = pw_flag + xr.where((np.abs(dCDIR) >= 135) & (np.abs(dCDIR) <= 225)& (burst_diff==0), 1, 0)
+    
     dat_flag = dat_flag + xr.where((np.abs(dCDIR) < 135) & (np.abs(dCDIR) >= 30) & (burst_diff==0), 3, 0)
     dat_flag = dat_flag + xr.where((np.abs(dCDIR) <= 330) & (np.abs(dCDIR) > 225) & (burst_diff==0), 3, 0)
     
     # Add the new flag data array to the existing dataset
-    ds['Dat_flag'] = (["time"], dat_flag)
-    ds['Dat_flag'].attrs['description'] = 'Flag value based on SNR, beam correlation, velocity magnitudes, velocity rate of change, current magnitude and direction. Sampled at 32Hz'
+    # Fail (5) is flag > 60
+    # Suspect with pw (4) is 8 < flag <= 60 and pw_flag >= 1
+    # Suspect (3) is 8 < flag <= 36 and pw_flag == 0
+    # Pass with possible pw (2) is <= 8 and pw_flag >= 1
+    # Pass (1) is flag <= 8 and pw_flag == 0
+    qartod_flag = qartod_flag + xr.where(dat_flag > 60, 5, 0)
+    qartod_flag = qartod_flag + xr.where((dat_flag <= 60) & (dat_flag > 8) & (pw_flag >= 1), 4, 0)
+    qartod_flag = qartod_flag + xr.where((dat_flag <= 60) & (dat_flag > 8) & (pw_flag == 0), 3, 0)
+    qartod_flag = qartod_flag + xr.where((dat_flag <= 8) & (pw_flag >= 1), 2, 0)
+    qartod_flag = qartod_flag + xr.where((dat_flag <= 8) & (pw_flag == 0), 1, 0)
+    ds['Dat_flag'] = (["time"], qartod_flag)
+    ds['Dat_flag'].attrs['Flag score'] = '[1, 2, 3, 4, 5]'
+    ds['Dat_flag'].attrs['Grade definition'] = '1 = Pass, 2 = Pass with potential phase wrapping, 3 = Suspect, 4 = Suspect with potential phase wrapping, 5 = Fail'
+    ds['Dat_flag'].attrs['Description'] = 'Flag grading system is based on QARTOD quality control parameters and tests in Nortek ADV user manual'
     
     return ds
     

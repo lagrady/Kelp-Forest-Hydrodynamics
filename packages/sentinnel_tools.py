@@ -248,28 +248,31 @@ def adcp_qc(ds):
     
     # Generate 2D array with shape (y,x):(vertical_bins, datetime) 
     flag = xr.zeros_like(ds.East) # Same shape as typical data array
-    
+    qartod_flag = xr.zeros_like(flag)
     #======================== REQUIRED TESTS ===================================================================
     # Tests which indicate more systematic error with the ADCP and its deployment if failed  
-    # number of tests = 19
-    # highest score (without required tests) = 38
-    # 
+    # highest suspect score (3) = 45
+    # lowest suspect score = 33
+    # Failure score (4) = 46
+    # 4 is flag > 45
+    # 3 is 12 < flag <=45
+    # 1 is <= 12
     # BIT test
     if 'BIT' in list(ds.keys()):
-        flag = flag + xr.where(ds.BIT == 0, 0, 4) # xr.where(condition, value if true, value if false)                                      
+        flag = flag + xr.where(ds.BIT == 0, 0, 46) # xr.where(condition, value if true, value if false)                                      
                                                   # (test, pass value, fail value)
     else:
         print ('Cannot conduct BIT test because variable does not exist in dataset')
         
     # Tilt test
-    flag = flag + xr.where(np.abs(ds.Roll) < 5, 0, 4)
-    flag = flag + xr.where(np.abs(ds.Pitch) < 5, 0, 4)
+    flag = flag + xr.where(np.abs(ds.Roll) < 5, 0, 46)
+    flag = flag + xr.where(np.abs(ds.Pitch) < 5, 0, 46)
     
     # Current speed test
     flag = flag + xr.where(ds.Magnitude < 1, 0, 3)
     
     # Current direction test
-    flag = flag + xr.where((ds.Direction >= 0) & (ds.Direction <= 360), 0, 4)
+    flag = flag + xr.where((ds.Direction >= 0) & (ds.Direction <= 360), 0, 46)
     
     # Horizontal velocity test
     # For East-West
@@ -325,7 +328,7 @@ def adcp_qc(ds):
 
     # Using the badbeams array, we can now isolate the exact positions where 1 or more beams are invalid
     flag = flag + xr.where(badbeams == 1, 3, 0) # 1 bad beam is acceptable, but not ideal
-    flag = flag + xr.where(badbeams > 1, 4, 0) # 2 or more bad beams invalidates the measurement
+    flag = flag + xr.where(badbeams > 1, 46, 0) # 2 or more bad beams invalidates the measurement
     
     #======================== RECOMMENDED TESTS ===================================================================
     # Tests which are still useful for assessing quality of data, but indicate more subjective issues caused by the environment or natural limitations of the ADCP
@@ -336,19 +339,19 @@ def adcp_qc(ds):
     
     # Beam correlation test
     flag = flag + xr.where((ds.Correlation <= 140) & (ds.Correlation > 65), 3, 0)
-    flag = flag + xr.where(ds.Correlation <= 65, 4, 0)
+    flag = flag + xr.where(ds.Correlation <= 65, 46, 0)
     
     # Percent good test
     pg = ds.PG1 + ds.PG4
 
     flag = flag + xr.where((pg > 25) & (pg <= 75), 3, 0)
-    flag = flag + xr.where(pg <= 25, 4, 0)
+    flag = flag + xr.where(pg <= 25, 46, 0)
     
     # Vertical velocity test
     flag = flag + xr.where(np.abs(ds.Vertical) <= .15, 0, 3)
     
     # Error velocity test
-    flag = flag + xr.where(np.abs(ds.Error_velocity) > .25, 4, 0)
+    flag = flag + xr.where(np.abs(ds.Error_velocity) > .25, 46, 0)
     flag = flag + xr.where((np.abs(ds.Error_velocity) <= .25) & (np.abs(ds.Error_velocity) > .15), 3, 0)
     
     # u, v, w rate of change test
@@ -360,14 +363,14 @@ def adcp_qc(ds):
     du[0] = du[0] - du[0] # Use the same method as the Echo Intensity test to make the first row all 0's
     du = du.T # Transpose the array back to its original format, now the array has a beginning column of 0's
     
-    flag = flag + xr.where(np.abs(du) >= 1, 4, 0) # Changes in velocity greater than 1 m/s are unlikely to occur naturally in the ocean, so these should be flagged as failure
+    flag = flag + xr.where(np.abs(du) >= 1, 46, 0) # Changes in velocity greater than 1 m/s are unlikely to occur naturally in the ocean, so these should be flagged as failure
     flag = flag + xr.where((np.abs(du) < 1) & (np.abs(du) >= .25), 3, 0) # Within a range of 1 and .25 m/s is suspect for our site and deserves to be marked, but not failed
 
     # For North-South (v)
     dv = np.diff(ds.North, prepend = 0).T
     dv[0] = dv[0] - dv[0]
     dv = dv.T
-    flag = flag + xr.where(np.abs(dv) >= 1, 4, 0)
+    flag = flag + xr.where(np.abs(dv) >= 1, 46, 0)
     flag = flag + xr.where((np.abs(dv) < 1) & (np.abs(dv) >= .25), 3, 0)
 
     # For vertical (w)
@@ -384,12 +387,12 @@ def adcp_qc(ds):
     # If badbeam = 0, measurement passes
     badbeams = xr.zeros_like(ds.EA1)
 
-    badbeams = badbeams + xr.where(ds.EA1 < 20, 4, 0) # Mark the bin as a +1 in badbeams if EA goes below 20 counts
-    badbeams = badbeams + xr.where(ds.EA2 < 20, 4, 0)
-    badbeams = badbeams + xr.where(ds.EA3 < 20, 4, 0)
-    badbeams = badbeams + xr.where(ds.EA4 < 20, 4, 0)
+    badbeams = badbeams + xr.where(ds.EA1 < 20, 1, 0) # Mark the bin as a +1 in badbeams if EA goes below 20 counts
+    badbeams = badbeams + xr.where(ds.EA2 < 20, 1, 0)
+    badbeams = badbeams + xr.where(ds.EA3 < 20, 1, 0)
+    badbeams = badbeams + xr.where(ds.EA4 < 20, 1, 0)
     flag = flag + xr.where(badbeams == 1, 3, 0)
-    flag = flag + xr.where(badbeams > 1, 4, 0)
+    flag = flag + xr.where(badbeams > 1, 46, 0)
     
     # Current gradient tests
     # For current speed
@@ -403,7 +406,13 @@ def adcp_qc(ds):
     flag = flag + xr.where(np.abs(dCDIR) < 45, 0, 3)
     
     # Add the new flag data array to the existing dataset
-    ds['Flag'] = (["BinDist", "time"], flag)
+    qartod_flag = qartod_flag + xr.where(flag > 45, 4, 0)
+    qartod_flag = qartod_flag + xr.where((flag <= 45) & (flag > 12), 3, 0)
+    qartod_flag = qartod_flag + xr.where(flag <= 12, 1, 0)
+    ds['Flag'] = (["BinDist", "time"], qartod_flag)
+    ds['Flag'].attrs['Flag score'] = '[1, 2, 3, 4]'
+    ds['Flag'].attrs['Grade definition'] = '1 = Pass, 2 = Not evaluated, 3 = Suspect, 4 = Fail'
+    ds['Flag'].attrs['Description'] = 'Flag grading system is based on QARTOD quality control parameters and tests for ADCPs'
     
     return ds
 
