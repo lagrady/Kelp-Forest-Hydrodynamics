@@ -1,8 +1,26 @@
 import pandas as pd
 import numpy as np
-import xarray as xr
 import matplotlib.pyplot as plt
+import matplotlib.colors
+import xarray as xr
+import gsw # https://teos-10.github.io/GSW-Python/gsw_flat.html
+import vector_tools as vt
+import Functions as fn
+
+import matplotlib.patches as mpatches
+from physoce import tseries as ts 
+from scipy.signal import welch 
+from scipy.stats import chi2 
+from scipy import stats
+from scipy.signal import periodogram
+from scipy.signal import argrelextrema
+from scipy.optimize import curve_fit
 from datetime import timedelta
+
+import sys
+if not sys.warnoptions:
+    import warnings
+    warnings.simplefilter("ignore")
 
 def vec_angle(x,y):
     '''
@@ -563,7 +581,7 @@ def eval_Sww(ds, burst_number, rho=None, Spp_conv = False, Plot = False):
         pressure = burst.Pressure * 10000
 
         # Since the goal is to find the specific spectra of waves, a spectrum of pressure is used over vertical velocity
-        Fp, Sp = welch(pressure, fs=32, nperseg= 2240, window='hanning') # Pressure spectra
+        Fp, Sp = welch(pressure, fs=32, nperseg= 2240, window='hann') # Pressure spectra
         
     
         # Required variables
@@ -592,7 +610,7 @@ def eval_Sww(ds, burst_number, rho=None, Spp_conv = False, Plot = False):
         fc = argrelextrema(Sw_prime, np.less, order=10)[0][0]+1
     else:
         fc = 22
-    Fw, Sw = welch(burst.Vertical, fs=32, nperseg= 2240, window='hanning') # Vertical velocity spectra
+    Fw, Sw = welch(burst.Vertical, fs=32, nperseg= 2240, window='hann') # Vertical velocity spectra
         
     # Fit the power law between the two bounds
     pars, cov = curve_fit(f=power_law, xdata=Fw[fc:], ydata=Sw[fc:], p0=[0, 0], bounds=(-np.inf, np.inf))
