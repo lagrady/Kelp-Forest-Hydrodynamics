@@ -527,12 +527,12 @@ def rotateVec(vector):
     if ENU == 1:
         # Using principle component analysis to rotate data to uncorrelated axes
         #[theta, primary, secondary] = PCrotate(v.East.values + 1j * v.North.values)
-        primary,secondary,theta =  vt.find_princaxs(v.East.values, v.North.values)
+        primary,secondary,theta =  vt.findPrincaxs(v.East.values, v.North.values)
         orig = np.logical_and(v.EOrig.values,v.NOrig.values)
     else:
         # Using principle component analysis to rotate data to uncorrelated axes
         #[theta, primary, secondary] = PCrotate(v.U.values + 1j * v.V.values)
-        primary,secondary,theta =  vt.find_princaxs(v.U.values, v.V.values)
+        primary,secondary,theta =  vt.findPrincaxs(v.U.values, v.V.values)
         orig = np.logical_and(v.UOrig.values,v.VOrig.values)
 
     # store angle of rotation as attribute and new vectors as primary and secondary
