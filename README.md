@@ -3,7 +3,7 @@
 Created by Logan Grady for Moss Landing Marine Labs Master's thesis project
 
 Background:
-The goal of this project is to record hydrodynamic data from within a kelp forest to track currents, stratification, kelp forest density and stipe diameters, and highh frequency water velocity over time. This data will be used to calculate turbulent properties of the kelp forest over time, such as Richardson gradient profiles, kelp reynolds numbers, and turbulent dissipation rate in the presence of waves.
+The goal of this project is to record hydrodynamic data from within a kelp forest to track currents, stratification, kelp forest density and stipe diameters, and high frequency water velocity over time. This data will be used to calculate turbulent properties of the kelp forest over time, such as Richardson gradient profiles, kelp reynolds numbers, and turbulent dissipation rate in the presence of waves.
 
 Notebooks folder:
 - Directory for all python notebooks
