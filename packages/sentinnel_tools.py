@@ -122,6 +122,7 @@ def WinADCP_to_dataset(data_path):
     ea3 = ea3.to_numpy().T
     ea4 = df.filter(like='EA4')
     ea4 = ea4.to_numpy().T
+    ea5 = (ea1 + ea2 + ea3 + ea4)/4
     
     # create coords
     rows = BinDist
@@ -148,13 +149,14 @@ def WinADCP_to_dataset(data_path):
             EA1 = (["BinDist", "time"], ea1),
             EA2 = (["BinDist", "time"], ea2),
             EA3 = (["BinDist", "time"], ea3),
-            EA4 = (["BinDist", "time"], ea4)
+            EA4 = (["BinDist", "time"], ea4),
+            EA5 = (["BinDist", "time"], ea5)
+            
         ),
         coords=dict(
             BinDist=(["BinDist"], rows),
             time=(["time"], cols),
         ),
-        attrs=dict(description="Velocity in beam coordinates"),
     )
     
     if 'BIT' in df.columns:
@@ -198,6 +200,8 @@ def WinADCP_to_dataset(data_path):
     ds['EA3'].attrs['description'] = "The 'echo amplitude' of beam three, an indicator of beam reflectivity off of a boundary."
     ds['EA4'].attrs['units'] = 'Cnt'
     ds['EA4'].attrs['description'] = "The 'echo amplitude' of beam four, an indicator of beam reflectivity off of a boundary."
+    ds['EA5'].attrs['units'] = 'Cnt'
+    ds['EA5'].attrs['description'] = "The average 'echo amplitude' across all beams."
     
     # Distance between bins and instrument
     ds['BinDist'] = ('bin',BinDist)
@@ -249,6 +253,8 @@ def adcp_qc(ds):
     # Generate 2D array with shape (y,x):(vertical_bins, datetime) 
     flag = xr.zeros_like(ds.East) # Same shape as typical data array
     qartod_flag = xr.zeros_like(flag)
+    
+    testCounter = 0 #Counts number of tests to find average flag value at the end
     #======================== REQUIRED TESTS ===================================================================
     # Tests which indicate more systematic error with the ADCP and its deployment if failed  
     # highest suspect score (3) = 45
@@ -259,28 +265,32 @@ def adcp_qc(ds):
     # 1 is <= 12
     # BIT test
     if 'BIT' in list(ds.keys()):
-        flag = flag + xr.where(ds.BIT == 0, 0, 46) # xr.where(condition, value if true, value if false)                                      
+        flag = flag + xr.where(ds.BIT == 0, 0, 99) # xr.where(condition, value if true, value if false)                                      
                                                   # (test, pass value, fail value)
+        testCounter = testCounter + 1
     else:
         print ('Cannot conduct BIT test because variable does not exist in dataset')
         
     # Tilt test
-    flag = flag + xr.where(np.abs(ds.Roll) < 5, 0, 46)
-    flag = flag + xr.where(np.abs(ds.Pitch) < 5, 0, 46)
+    flag = flag + xr.where(np.abs(ds.Roll) < 5, 0, 99)
+    flag = flag + xr.where(np.abs(ds.Pitch) < 5, 0, 99)
+    testCounter = testCounter + 1
     
     # Current speed test
     flag = flag + xr.where(ds.Magnitude < 1, 0, 3)
+    testCounter = testCounter + 1
     
     # Current direction test
-    flag = flag + xr.where((ds.Direction >= 0) & (ds.Direction <= 360), 0, 46)
+    flag = flag + xr.where((ds.Direction >= 0) & (ds.Direction <= 360), 0, 99)
+    testCounter = testCounter + 1
     
     # Horizontal velocity test
     # For East-West
     flag = flag + xr.where(np.abs(ds.East) < 1, 0, 3)
+    testCounter = testCounter + 1
     # For North-South
     flag = flag + xr.where(np.abs(ds.North) < 1, 0, 3)
-    
-    # Flat line test (Still working on this)
+    testCounter = testCounter + 1
     
     # Echo intensity test
     # Dimensions (D) = 3
@@ -328,7 +338,14 @@ def adcp_qc(ds):
 
     # Using the badbeams array, we can now isolate the exact positions where 1 or more beams are invalid
     flag = flag + xr.where(badbeams == 1, 3, 0) # 1 bad beam is acceptable, but not ideal
-    flag = flag + xr.where(badbeams > 1, 46, 0) # 2 or more bad beams invalidates the measurement
+    flag = flag + xr.where(badbeams > 1, 99, 0) # 2 or more bad beams invalidates the measurement
+    testCounter = testCounter + 1
+    
+    # Sea surface test
+    #All depth bins greater than the recorded depth and anomalously high echo amplitude are flagged as out of water
+    #Threshold of 150 counts is subjective based on observations from the data
+    flag = flag + xr.where((((ds.East.BinDist * .25) + .81) < ds.Depth) & (ds.EA5.values < 150), 0, 99)
+    testCounter = testCounter + 1
     
     #======================== RECOMMENDED TESTS ===================================================================
     # Tests which are still useful for assessing quality of data, but indicate more subjective issues caused by the environment or natural limitations of the ADCP
@@ -336,26 +353,32 @@ def adcp_qc(ds):
     
     # Battery voltage test
     flag = flag + xr.where(ds.Battery > 145, 0, 3)
+    testCounter = testCounter + 1
     
     # Beam correlation test
     flag = flag + xr.where((ds.Correlation <= 140) & (ds.Correlation > 65), 3, 0)
-    flag = flag + xr.where(ds.Correlation <= 65, 46, 0)
+    flag = flag + xr.where(ds.Correlation <= 65, 99, 0)
+    testCounter = testCounter + 1
     
     # Percent good test
     pg = ds.PG1 + ds.PG4
 
     flag = flag + xr.where((pg > 25) & (pg <= 75), 3, 0)
-    flag = flag + xr.where(pg <= 25, 46, 0)
+    flag = flag + xr.where(pg <= 25, 99, 0)
+    testCounter = testCounter + 1
     
     # Vertical velocity test
     flag = flag + xr.where(np.abs(ds.Vertical) <= .15, 0, 3)
+    testCounter = testCounter + 1
     
     # Error velocity test
-    flag = flag + xr.where(np.abs(ds.Error_velocity) > .25, 46, 0)
+    flag = flag + xr.where(np.abs(ds.Error_velocity) > .25, 99, 0)
     flag = flag + xr.where((np.abs(ds.Error_velocity) <= .25) & (np.abs(ds.Error_velocity) > .15), 3, 0)
+    testCounter = testCounter + 1
     
     # u, v, w rate of change test
     # This test uses the same np.diff with prepend method as the echo-intensity test, only across columns instead of  rows
+    
     # For East-west (u)
     # Using axis = 1, np.diff eliminates the first column, or the first timestamp
     du = np.diff(ds.East, prepend = 0).T # The prepend tool replaces the original column, but numpy doesn't have an efficient way to apply a function down a column, only across rows
@@ -363,21 +386,24 @@ def adcp_qc(ds):
     du[0] = du[0] - du[0] # Use the same method as the Echo Intensity test to make the first row all 0's
     du = du.T # Transpose the array back to its original format, now the array has a beginning column of 0's
     
-    flag = flag + xr.where(np.abs(du) >= 1, 46, 0) # Changes in velocity greater than 1 m/s are unlikely to occur naturally in the ocean, so these should be flagged as failure
+    flag = flag + xr.where(np.abs(du) >= 1, 99, 0) # Changes in velocity greater than 1 m/s are unlikely to occur naturally in the ocean, so these should be flagged as failure
     flag = flag + xr.where((np.abs(du) < 1) & (np.abs(du) >= .25), 3, 0) # Within a range of 1 and .25 m/s is suspect for our site and deserves to be marked, but not failed
-
+    testCounter = testCounter + 1
+    
     # For North-South (v)
     dv = np.diff(ds.North, prepend = 0).T
     dv[0] = dv[0] - dv[0]
     dv = dv.T
-    flag = flag + xr.where(np.abs(dv) >= 1, 46, 0)
+    flag = flag + xr.where(np.abs(dv) >= 1, 99, 0)
     flag = flag + xr.where((np.abs(dv) < 1) & (np.abs(dv) >= .25), 3, 0)
-
+    testCounter = testCounter + 1
+    
     # For vertical (w)
     dw = np.diff(ds.Vertical, prepend = 0).T
     dw[0] = dw[0] - dw[0]
     dw = dw.T
     flag = flag + xr.where(np.abs(dw) > .15, 3, 0) # Magnitudes of vertical velocity are almost always smaller than horizontal velocity, so the thresholds are reduced
+    testCounter = testCounter + 1
     
     # Echo intensity drop off test
     # Similar to echo intensity test, only it's a flat threshold for each individual bin, not the difference between bins
@@ -392,24 +418,28 @@ def adcp_qc(ds):
     badbeams = badbeams + xr.where(ds.EA3 < 20, 1, 0)
     badbeams = badbeams + xr.where(ds.EA4 < 20, 1, 0)
     flag = flag + xr.where(badbeams == 1, 3, 0)
-    flag = flag + xr.where(badbeams > 1, 46, 0)
+    flag = flag + xr.where(badbeams > 1, 99, 0)
+    testCounter = testCounter + 1
     
     # Current gradient tests
     # For current speed
     dCSPD = np.diff(ds.Magnitude, axis = 0, prepend = 0)
     dCSPD[0] = dCSPD[0] - dCSPD[0]
     flag = flag + xr.where(np.abs(dCSPD) < .3, 0, 3)
-
-    # For current direction
+    testCounter = testCounter + 1
+    
+    # For change in current direction
     dCDIR = np.diff(ds.Direction, axis = 0, prepend = 0)
     dCDIR[0] = dCDIR[0] - dCDIR[0]
     flag = flag + xr.where(np.abs(dCDIR) < 45, 0, 3)
+    testCounter = testCounter + 1
     
     # Add the new flag data array to the existing dataset
-    qartod_flag = qartod_flag + xr.where(flag > 45, 4, 0)
-    qartod_flag = qartod_flag + xr.where((flag <= 45) & (flag > 12), 3, 0)
-    qartod_flag = qartod_flag + xr.where(flag <= 12, 1, 0)
-    ds['Flag'] = (["BinDist", "time"], qartod_flag)
+    flag = flag/testCounter
+    qartod_flag = qartod_flag + xr.where(flag >= 4, 4, 0)
+    qartod_flag = qartod_flag + xr.where((flag < 4) & (flag > 1), 3, 0)
+    qartod_flag = qartod_flag + xr.where(flag <= 1, 1, 0)
+    ds['Flag'] = (["BinDist", "time"], qartod_flag.values)
     ds['Flag'].attrs['Flag score'] = '[1, 2, 3, 4]'
     ds['Flag'].attrs['Grade definition'] = '1 = Pass, 2 = Not evaluated, 3 = Suspect, 4 = Fail'
     ds['Flag'].attrs['Description'] = 'Flag grading system is based on QARTOD quality control parameters and tests for ADCPs'
