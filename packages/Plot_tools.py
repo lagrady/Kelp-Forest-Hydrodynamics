@@ -28,59 +28,107 @@ from scipy.stats.distributions import  t
 import vector_tools as vt
 
 #============================================================================================================
-def overview_plot(tempDS, adcpDS, advDS, timeStart = None, timeEnd = None, saveFig = False, figName = None):
+def overview_plot(tempData, adcpData, advData = None, startTime = None, endTime = None, resample = None, saveFig = None):
     
-    if (timeStart & timeEnd):
-        tempDS = tempDS.sel(time=slice(str(timeStart), str(timeEnd)))
-        adcpDS = adcpDS.sel(time=slice(str(timeStart), str(timeEnd)))
-        advDS = advDS.sel(time=slice(str(timeStart), str(timeEnd)))
-        
-    adcpDS = adcpDS.resample(
+    tempDS = tempData.copy(deep=True)
+    adcpDS = adcpData.copy(deep=True)
+    if advData:
+        vecDS = advData.copy(deep=True)
     
-    temp20mRoll = tempDS.rolling(time=20).mean()
-    adcp20mRoll = adcpDS.isel(BinDist=1).rolling(time=20).mean()
-        
-    plt.figure(figsize = (20,16))
-    #=================================================================================================
-    # Temperature
+    if startTime:
+        print('Subsampling')
+        tempDS = tempDS.sel(time = slice(str(startTime), str(endTime)))
+        adcpDS = adcpDS.sel(time = slice(str(startTime), str(endTime)))
+        if advData:
+            vecDS = vecDS.sel(time = slice(str(startTime), str(endTime)))
+
+    tempDS = tempDS.Temperature
+
+    adcpEast = adcpDS.EastDA.dropna(dim = 'time')
+    adcpNorth = adcpDS.NorthDA.dropna(dim = 'time')
+    adcpCDIR = vt.vec_angle(adcpEast, adcpNorth)
+    if advData:
+        gb = np.unique(vecDS.burst.where((vecDS.dEast < .25) & (vecDS.dNorth < .25) & (vecDS.burst.isin(vecDS.BurstNum)), drop=True))
+        advEast = vecDS.East.where(vecDS.BurstNum.isin(gb)).dropna(dim = 'time')
+        advNorth = vecDS.North.where(vecDS.BurstNum.isin(gb)).dropna(dim = 'time')
+        advCDIR = vt.vec_angle(advEast, advNorth)
+
+    if resample:
+        print('Resampling')
+        tempDS = tempDS.resample(time = str(resample)).mean()
+
+        adcpEast = adcpEast.resample(time = str(resample)).mean().dropna(dim = 'time')
+        adcpNorth = adcpNorth.resample(time = str(resample)).mean().dropna(dim = 'time')
+        adcpCDIR = vt.vec_angle(adcpEast, adcpNorth)
+        if advData:
+            gb = np.unique(vecDS.burst.where((vecDS.dEast < .25) & (vecDS.dNorth < .25) & (vecDS.burst.isin(vecDS.BurstNum)), drop=True))
+            advEast = advEast.resample(time = str(resample)).mean().dropna(dim = 'time')
+            advNorth = advNorth.resample(time = str(resample)).mean().dropna(dim = 'time')
+            advCDIR = vt.vec_angle(advEast, advNorth)
+    
+
+    print('Plotting')
+    # TEMPERATURE
+    plt.figure(figsize = (20,25))
+
     plt.subplot(411)
-    plt.gca().set_prop_cycle(c = ['red','darkorange','blue','green','cyan','yellow','black'])
-    plt.plot(tempDS.time, tempDS.Temperature.T, lw = 1)
-    plt.title('Temperature within SWC Kelp Forest', fontsize=14)
-    plt.ylabel("Temperature (Celsius)", fontsize=14)
+    plt.gca().set_prop_cycle(c = ['red','darkorange','yellow','green','blue','violet','black'])
+    plt.plot(tempDS.time, tempDS.T, lw = 1)
+    if resample:
+        plt.title('Temperature within SWC Kelp Forest Mooring (' + str(resample) + ' average)', fontsize=14)
+    else:
+        plt.title('Temperature within SWC Kelp Forest Mooring', fontsize=14)
+    plt.ylabel("Temperature (Celsius)", fontsize=12)
+    plt.xticks(rotation = 15)
     plt.margins(x=.01)
-    plt.legend(['2m', '4m','6m','8m','9.1m', '9.4m', '9.7m'], loc = 'upper left', fontsize=14)
+    plt.legend(['2m', '4m','6m','8m','9.1m', '9.4m', '9.7m'], loc = 'upper left', fontsize=12)
     #=================================================================================================
     # Eastern Velocity
     plt.subplot(412)
-    plt.plot(adcp_dep1.time, adcp_dep1.East.isel(BinDist=1), '.r', label = 'ADCP-Eastern')
-    plt.plot(adcp_10mroll_dep1.time, adcp_10mroll_dep1.East,'-k', label = 'ADCP-Eastern (10-min rolling)')
-    plt.plot(adv_10m_dep1.time, adv_10m_dep1.East, '.b', label = 'ADV-Eastern (10-min average)')
-    plt.ylim(-.1,.1)
-    plt.legend(loc = 'upper right')
+    plt.plot(adcpEast.time, adcpEast,'-k', label = 'Depth average (ADCP)')
+    if advData:
+        plt.plot(advEast.time, advEast, '.-b', label = '1m above seafloor (ADV)')
     plt.axhline(y=0, c='black', lw=2)
+    if resample:
+        plt.title('Eastern velocity (' + str(resample) + ' average)', fontsize=14)
+    else:
+        plt.title('Eastern velocity', fontsize=14)
+    plt.ylabel('Velocity (m/s)', fontsize=12)
+    plt.xticks(rotation = 15)
+    plt.ylim(-.03,.03)
     plt.margins(x=.01)
-    plt.ylabel('Velocity (m/s)')
-    plt.title('Eastern Velocity (1m Above Seafloor)')
+    plt.legend(loc = 'upper right', fontsize=12)
+
     #=================================================================================================
-    # Northern Velocity
+    # Northern Velocity 
     plt.subplot(413)
-    plt.plot(adcp_dep1.time, adcp_dep1.North.isel(BinDist=1), '.r', label = 'ADCP-Northern')
-    plt.plot(adcp_10mroll_dep1.time, adcp_10mroll_dep1.North,'-k', label = 'ADCP-Northern (10-min rolling)')
-    plt.plot(adv_10m_dep1.time, adv_10m_dep1.North, '.b', label = 'ADV-Northern (10-min average)')
-    plt.ylim(-.1,.1)
-    plt.legend(loc = 'upper right')
+    plt.plot(adcpNorth.time, adcpNorth,'-k', label = 'Depth average (ADCP)')
+    if advData:
+        plt.plot(advNorth.time, advNorth, '.-b', label = '1m above seafloor (ADV)')
     plt.axhline(y=0, c='black', lw=2)
+    if resample:
+        plt.title('Northern velocity (' + str(resample) + ' average)', fontsize=14)
+    else:
+        plt.title('Northern velocity', fontsize=14)
+    plt.ylabel('Velocity (m/s)', fontsize=12)
+    plt.xticks(rotation = 15)
+    plt.ylim(-.03,.03)
     plt.margins(x=.01)
-    plt.ylabel('Velocity (m/s)')
-    plt.title('Northern Velocity (1m Above Seafloor)')
+
     #=================================================================================================
-    # Velocity direction
-    plt.subplot(414)
-    plt.plot(adcp_10mroll_dep1.time, adcp_10mroll_dep1.Direction,'-k', label = 'ADCP-Velocity Direction (10-min rolling)')
-    plt.plot(adv_10m_dep1.time, adv_10m_dep1.CDIR, '.b', label = 'ADV-Velocity Direction (1-min average)')
-    plt.legend(loc = 'upper right')
-    plt.margins(x=.01)
-    plt.ylabel('Direction (Degrees)')
+    # Current Direction 
+    #plt.subplot(414)
+    plt.plot(adcpCDIR.time, adcpCDIR,'-k', label = 'Depth average (ADCP)')
+    if advData:
+        plt.plot(advCDIR.time, advCDIR, '.-b', label = '1m above seafloor (ADV)')
+    if resample:
+        plt.title('Current direction (' + str(resample) + ' average)', fontsize=14)
+    else:
+        plt.title('Current direction', fontsize=14)
+    plt.ylabel('Direction (Degrees)', fontsize=12)
     plt.xlabel('Date')
-    plt.title('Velocity direction (1m Above Seafloor)')
+    plt.xticks(rotation = 15)
+    plt.margins(x=.01)
+    
+    if saveFig:
+        plt.savefig(str(saveFig))
