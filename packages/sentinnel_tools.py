@@ -343,8 +343,8 @@ def adcp_qc(ds):
     
     # Sea surface test
     #All depth bins greater than the recorded depth and anomalously high echo amplitude are flagged as out of water
-    #Threshold of 150 counts is subjective based on observations from the data
-    flag = flag + xr.where((((ds.East.BinDist * .25) + .81) < ds.Depth) & (ds.EA5.values < 150), 0, 99)
+    #Threshold of 170 counts is subjective based on observations from the data
+    flag = flag + xr.where((((ds.East.BinDist * ds.attrs["Bin Size"]) + ds.attrs["1st Bin Range"]) < ds.Depth) & (ds.EA5.values < 170), 0, 99)
     testCounter = testCounter + 1
     
     #======================== RECOMMENDED TESTS ===================================================================
