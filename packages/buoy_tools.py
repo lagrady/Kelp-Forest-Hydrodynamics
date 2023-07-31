@@ -3,10 +3,9 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.colors
+import re
 
-
-
-def nbdc_to_ds(datapath):
+def ndbc_to_ds(datapath):
     '''
     Load NDBC Standard meterological data text data file into xarray dataset.
     
@@ -25,11 +24,10 @@ def nbdc_to_ds(datapath):
     datapath = 'nbdc_july.txt' 
     ds = nbdc_to_ds(datapath)
     '''
-    
     # First two lines contain header names and units, respectively
     nhead = 2
     headerlines = list() # Create blank list for header and units
-    
+
     # Open file and extract relevant variable names and units
     with open(datapath) as f: 
             for i in range(nhead):
@@ -39,42 +37,60 @@ def nbdc_to_ds(datapath):
                 line = line.replace('   ', ' ') # Remove wonky spacing and extra commas for clean list
                 line = line.replace(' ', ',')
                 line = line.replace(',,', ',')
+                line = line.replace(',,', ',')
                 headerlines.append(line) # Append the headerline list
-                
-    var_names = headerlines[0].split(',') # Create list for names and units
+
+    # Create list for names and units
+    var_names = headerlines[0].split(',')
     var_units = headerlines[1].split(',')
-    
-    # Create new pandas dataframe with var_names, without the 'units' row getting in the way
-    df = pd.read_csv(datapath, skiprows = nhead, names = var_names, delimiter=' ', index_col = False)
-    
+
+    #Convert textfile to pandas dataframe
+    df = pd.read_csv(datapath, skiprows = nhead, names = var_names, delimiter='\s+', index_col = False)
+
     # String together the seperate date columns into a single cohesive datetime column
     datestr = df['YY'].map(str)+'-'+df['MM'].map(str)+'-'+df['DD'].map(str)
     timestr = df['hh'].map(str)+':'+df['mm'].map(str)
-    df['datetime'] = pd.to_datetime(datestr+' '+timestr,utc=True)
-    df = df.drop(columns=['YY', 'MM', 'DD', 'hh', 'mm']) # Drop the now useless seperated date and time columns
-    
-    # Generate an updated list of variable names, units, and descriptions for abbreviated variable names
-    var_names_new = df.columns[0:13] # Creates list of all variables except 'datetime'
-    var_units_new = var_units[5:] # Creates list of units that excludes 'YY', 'MM', etc.
-    for i in var_units_new: # Removes any randomly created spaces in the units list
-        if(len(i)==0):
-            var_units_new.remove(i)
+    datetime = pd.to_datetime(datestr+' '+timestr,utc=True)
+
+    #Create descriptions of dataframe variable acronyms for easy identification
     var_desc = ['Wind direction', 'Wind speed', 'Wind gust', 'Significant wave height', 'Dominant wave period', 'Average wave period',
                'Mean wave direction', 'Atmospheric pressure', 'Air temperature', 'Water temperature', 'Dew point', 'Visibility', 'Tidal height']
-    
+
     #Create the dataset
-    ds = xr.Dataset(coords={'time': df['datetime'].values}) # Creates dataset with only time coordinate
-    for i in enumerate(var_names_new):
-        step = i[0] # Indicates the iteration of the loop
-        name = i[1] # Indicates the current name of the variable
-        
-        vardata = df[str(name)].values # Call values from the dataframe corresponding to the current variable name
-        
-        ds[name] = ('time', vardata) # Create new variable in xarray dataset corresponding to the variable from the pandas dataframe
-        
-        ds[name].attrs['units'] = var_units_new[step] # Add units and variable description in the attributes section of the variable
-        ds[name].attrs['description'] = var_desc[step]
-        
+    ds = xr.Dataset(coords={'time': datetime}) # Creates dataset with only time coordinate
+    for i in enumerate(var_names[5:]):
+
+        # Call values from the dataframe corresponding to the current variable name
+        vardata = df[str(i[1])].values 
+
+        # Create new variable in xarray dataset corresponding to the variable from the pandas dataframe
+        ds[str(i[1])] = ('time', vardata)
+
+        # Missing values are marked with 9's, and are converted to NaN's here
+        if ds[str(i[1])].max() == 99:
+            ds[str(i[1])] = ds[str(i[1])].where(ds[str(i[1])] < 99)
+        elif ds[str(i[1])].max() == 999:
+            ds[str(i[1])] = ds[str(i[1])].where(ds[str(i[1])] < 999)
+        elif ds[str(i[1])].max() == 9999:
+            ds[str(i[1])] = ds[str(i[1])].where(ds[str(i[1])] < 9999)
+
+        # Add units and variable description in the attributes section for each variable
+        ds[str(i[1])].attrs['units'] = var_units[i[0]+5] 
+        ds[str(i[1])].attrs['description'] = var_desc[i[0]]
+
+    #Manually add ndbc metadata from their data portal
+    ds.attrs['Station'] = '46042'
+    ds.attrs['Owner'] = 'National Data Buoy Center'
+    ds.attrs['URL'] = 'https://www.ndbc.noaa.gov/station_page.php?station=46042'
+    ds.attrs['Latitude'] = 36.785
+    ds.attrs['Longitude'] = -122.396
+    ds.attrs['Air temp height'] = 3.7
+    ds.attrs['Anemometer height'] = 4.1
+    ds.attrs['Barometer elevation'] = 2.7
+    ds.attrs['Sea temp depth'] = -1.5
+    ds.attrs['Water depth'] = 1693
+    ds.attrs['Sample frequency'] = '10 minutes'
+
     return ds
 
 def m1_2d_reshape(filepath):
