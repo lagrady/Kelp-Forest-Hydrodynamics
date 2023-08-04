@@ -28,97 +28,95 @@ from scipy.stats.distributions import  t
 import vector_tools as vt
 
 #=======================================================================================================================
-def overview_plot(tempData, adcpData, advData = None, startTime = None, endTime = None, resample = None, saveFig = None):
+def overview_plot(tempData, adcpData = None, advData = None, startTime = None, endTime = None, resample = None, supTitle = None, saveFig = None):
     
+    fig, axs = plt.subplots(4,1,constrained_layout=True, figsize = (12,12))
+    if supTitle:
+        fig.suptitle(str(supTitle), x = .55, size = 20)
+    
+    # Temperature
+    print('Plotting temperature')
     tempDS = tempData.copy(deep=True)
-    adcpDS = adcpData.copy(deep=True)
+    Temp = tempDS.Temperature
+    if startTime:
+        Temp = Temp.sel(time = slice(str(startTime), str(endTime)))
+    if resample:
+        Temp = Temp.resample(time = str(resample)).mean()
+    axs[0].set_title('Temperature', size=14) 
+    axs[0].set_prop_cycle(c = ['red','darkorange','yellow','green','blue','violet','black'])
+    axs[0].plot(Temp.time, Temp.T, lw = 1)
+    axs[0].set_ylabel(r'Temperature [$^\circ$C]', fontsize=12)
+    axs[0].tick_params(axis = 'x', labelrotation = 15)
+    axs[0].margins(x=.01)
+    axs[0].legend(['2m', '4m','6m','8m','9.1m', '9.4m', '9.7m'], loc = 'upper left', fontsize=8)
+        
+        
+    if adcpData:
+        adcpDS = adcpData.copy(deep=True)
+        adcpEast = adcpDS.EastDA
+        adcpNorth = adcpDS.NorthDA
+        if startTime:
+            adcpEast = adcpEast.sel(time = slice(str(startTime), str(endTime))).dropna(dim = 'time')
+            adcpNorth = adcpNorth.sel(time = slice(str(startTime), str(endTime))).dropna(dim = 'time')
+        if resample:
+            adcpEast = adcpEast.resample(time = str(resample)).mean().dropna(dim = 'time')
+            adcpNorth = adcpNorth.resample(time = str(resample)).mean().dropna(dim = 'time')
     if advData:
         vecDS = advData.copy(deep=True)
-    
-    if startTime:
-        print('Subsampling')
-        tempDS = tempDS.sel(time = slice(str(startTime), str(endTime)))
-        adcpDS = adcpDS.sel(time = slice(str(startTime), str(endTime)))
-        if advData:
+        if startTime:
             vecDS = vecDS.sel(time = slice(str(startTime), str(endTime)))
-
-    tempDS = tempDS.Temperature
-
-    adcpEast = adcpDS.EastDA.dropna(dim = 'time')
-    adcpNorth = adcpDS.NorthDA.dropna(dim = 'time')
-    adcpCDIR = vt.vec_angle(adcpEast, adcpNorth)
-    if advData:
         gb = np.unique(vecDS.burst.where((vecDS.dEast < .25) & (vecDS.dNorth < .25) & (vecDS.burst.isin(vecDS.BurstNum)), drop=True))
         advEast = vecDS.East.where(vecDS.BurstNum.isin(gb)).dropna(dim = 'time')
         advNorth = vecDS.North.where(vecDS.BurstNum.isin(gb)).dropna(dim = 'time')
-        advCDIR = vt.vec_angle(advEast, advNorth)
-
-    if resample:
-        print('Resampling')
-        tempDS = tempDS.resample(time = str(resample)).mean()
-
-        adcpEast = adcpEast.resample(time = str(resample)).mean().dropna(dim = 'time')
-        adcpNorth = adcpNorth.resample(time = str(resample)).mean().dropna(dim = 'time')
-        adcpCDIR = vt.vec_angle(adcpEast, adcpNorth)
-        if advData:
-            gb = np.unique(vecDS.burst.where((vecDS.dEast < .25) & (vecDS.dNorth < .25) & (vecDS.burst.isin(vecDS.BurstNum)), drop=True))
+        if resample:
             advEast = advEast.resample(time = str(resample)).mean().dropna(dim = 'time')
             advNorth = advNorth.resample(time = str(resample)).mean().dropna(dim = 'time')
-            advCDIR = vt.vec_angle(advEast, advNorth)
-    
-
-    print('Plotting')
-    # TEMPERATURE
-    plt.figure(figsize = (20,25))
-
-    plt.subplot(411)
-    plt.gca().set_prop_cycle(c = ['red','darkorange','yellow','green','blue','violet','black'])
-    plt.plot(tempDS.time, tempDS.T, lw = 1)
-    if resample:
-        plt.title('Temperature within SWC Kelp Forest Mooring (' + str(resample) + ' average)', fontsize=14)
-    else:
-        plt.title('Temperature within SWC Kelp Forest Mooring', fontsize=14)
-    plt.ylabel("Temperature (Celsius)", fontsize=12)
-    plt.xticks(rotation = 15)
-    plt.margins(x=.01)
-    plt.legend(['2m', '4m','6m','8m','9.1m', '9.4m', '9.7m'], loc = 'upper left', fontsize=12)
-
-    # Eastern Velocity
-    plt.subplot(412)
-    plt.plot(adcpEast.time, adcpEast,'-k', label = 'Depth average (ADCP)')
-    if advData:
-        plt.plot(advEast.time, advEast, '.-b', label = '1m above seafloor (ADV)')
-    plt.axhline(y=0, c='black', lw=2)
-    if resample:
-        plt.title('Eastern velocity (' + str(resample) + ' average)', fontsize=14)
-    else:
-        plt.title('Eastern velocity', fontsize=14)
-    plt.ylabel('Velocity (m/s)', fontsize=12)
-    plt.xticks(rotation = 15)
-    plt.ylim(-.03,.03)
-    plt.margins(x=.01)
-    plt.legend(loc = 'upper right', fontsize=12)
-
+            
     # Northern Velocity 
-    plt.subplot(413)
-    plt.plot(adcpNorth.time, adcpNorth,'-k', label = 'Depth average (ADCP)')
+    axs[1].set_title('Northern Velocity', size=14)
+    if adcpData:
+        axs[1].plot(adcpNorth.time, adcpNorth, '-r', lw = 2, label = 'Depth-averaged (ADCP)')
     if advData:
-        plt.plot(advNorth.time, advNorth, '.-b', label = '1m above seafloor (ADV)')
-    plt.axhline(y=0, c='black', lw=2)
-    if resample:
-        plt.title('Northern velocity (' + str(resample) + ' average)', fontsize=14)
-    else:
-        plt.title('Northern velocity', fontsize=14)
-    plt.ylabel('Velocity (m/s)', fontsize=12)
-    plt.xticks(rotation = 15)
-    plt.ylim(-.03,.03)
-    plt.margins(x=.01)
+        axs[1].plot(advNorth.time, advNorth, '.-b', lw = 1, ms = 3, label = '1m above bottom (ADV)')
+    axs[1].axhline(y=0, c = 'black', ls = '--')
+    axs[1].set_ylabel(r"Velocity [$\frac{m}{s}$]", fontsize=12)
+    axs[1].tick_params(axis = 'x', labelrotation = 15)
+    axs[1].margins(x=.01)
+    axs[1].legend(loc = 'upper left', fontsize=8)
+
+
+    # Eastern Velocity    
+    axs[2].set_title('Eastern Velocity', size=14)
+    if adcpData:
+        axs[2].plot(adcpEast.time, adcpEast, '-r', lw = 2, label = 'Depth-averaged (ADCP)')
+    if advData:
+        axs[2].plot(advEast.time, advEast, '.-b', lw = 1, ms = 3, label = '1m above bottom (ADV)')
+    axs[2].axhline(y=0, c = 'black', ls = '--')
+    axs[2].set_ylabel(r"Velocity [$\frac{m}{s}$]", fontsize=12)
+    axs[2].tick_params(axis = 'x', labelrotation = 15)
+    axs[2].margins(x=.01)
+    axs[2].legend(loc = 'upper left', fontsize=8)
+        
+    # Velocity Direction
+    axs[3].set_title('Current Direction', size=14)
+    if adcpData:
+        adcpCDIR = vt.vec_angle(adcpEast, adcpNorth)
+        axs[3].plot(adcpCDIR.time, adcpCDIR, '-r', lw = 2, label = 'ADCP')
+    if advData:
+        advCDIR = vt.vec_angle(advEast, advNorth)
+        axs[3].plot(advCDIR.time, advCDIR, '.-b', lw = 1, ms = 3, label = 'ADV')
+    axs[3].set_ylim(-5,370)
+    axs[3].set_ylabel("Current Heading [Degrees]", fontsize=12)
+    axs[3].set_xlabel("Date", fontsize = 12)
+    axs[3].tick_params(axis = 'x', labelrotation = 15)
+    axs[3].margins(x=.01, y = .1)
+    axs[3].legend(loc = 'upper left', fontsize=8)  
     
     if saveFig:
         plt.savefig(str(saveFig))
 #=======================================================================================================================
         
-def temp_adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tStart = None, tEnd = None,
+def adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tStart = None, tEnd = None,
                           rSamp = None, flagCutoff = None, flagPlot = False, cMap = 'viridis', supTitle = None, saveFig = None):
 
     binRange = adcpDS.BinDist.values[binNums[0]:binNums[1]]+adcpDS.attrs['Instrument Height(m)']
@@ -140,11 +138,6 @@ def temp_adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tSt
     if flagCutoff is not None:
         East = East.where(Flag < flagCutoff)
         North = North.where(Flag < flagCutoff)
-    
-    #East = East.dropna(dim = 'time', how = 'all')
-    #North = North.dropna(dim = 'time', how = 'all')
-    #Depth = Depth.dropna(dim = 'time', how = 'all')
-    #Flag = Flag.dropna(dim = 'time', how = 'all')
 
     if flagPlot == True:                                                                                         
         fig, axs = plt.subplots(4,1,constrained_layout=True, figsize = (15,12))
@@ -164,7 +157,7 @@ def temp_adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tSt
     axs[0].set_title('Temperature', size = 14)
     axs[0].set_prop_cycle(c = ['red','darkorange','yellow','green','blue','violet','black'])
     axs[0].plot(Temp.time, Temp.T, lw = 1)
-    axs[0].set_ylabel("Temperature (Celsius)", fontsize=12)
+    axs[0].set_ylabel("Temperature [$^\circ$C]", fontsize=12)
     axs[0].tick_params(axis = 'x', labelrotation = 15)
     axs[0].margins(x=.00)
     axs[0].legend(['2m', '4m','6m','8m','9.1m', '9.4m', '9.7m'], fontsize=10)
@@ -184,11 +177,11 @@ def temp_adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tSt
     axs[2].tick_params(axis = 'x', labelrotation = 15)
     axs[2].legend(loc = 'upper left', fontsize=10)
 
-    fig.colorbar(northVel, ax=axs[1], location='right').set_label(label='Velocity [m/s]',size=12)
-    fig.colorbar(eastVel, ax=axs[2], location='right').set_label(label='Velocity [m/s]',size=12)
+    fig.colorbar(northVel, ax=axs[1], location='right').set_label(label=r"Velocity [$\frac{m}{s}$]",size=12,rotation = -90, va = 'bottom')
+    fig.colorbar(eastVel, ax=axs[2], location='right').set_label(label=r"Velocity [$\frac{m}{s}$]",size=12,rotation = -90, va = 'bottom')
     
     if supTitle is not None:
-        fig.suptitle(str(supTitle), x = .475, y = 1.05, size = 20)
+        fig.suptitle(str(supTitle), x = .475, size = 20)
     
     if saveFig:
         plt.savefig(str(saveFig))

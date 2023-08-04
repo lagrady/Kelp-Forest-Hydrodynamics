@@ -272,16 +272,16 @@ def vectorFlag(ds):
     testCounter = testCounter + 3
                        
     # Beam correlation test          
-    dat_flag = dat_flag + xr.where((ds.Corr1 > 70), 0, 0) # Full pass condition
-    dat_flag = dat_flag + xr.where((ds.Corr1 <= 70) & (ds.Corr1 > 50), 3, 0) # Not ideal but acceptable
+    dat_flag = dat_flag + xr.where((ds.Corr1 >= 70), 0, 0) # Full pass condition
+    dat_flag = dat_flag + xr.where((ds.Corr1 < 70) & (ds.Corr1 > 50), 3, 0) # Not ideal but acceptable
     dat_flag = dat_flag + xr.where((ds.Corr1 <= 50), 9, 0) # Full failure 
     
-    dat_flag = dat_flag + xr.where((ds.Corr2 > 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr2 <= 70) & (ds.Corr2 > 50), 3, 0) 
+    dat_flag = dat_flag + xr.where((ds.Corr2 >= 70), 0, 0) 
+    dat_flag = dat_flag + xr.where((ds.Corr2 < 70) & (ds.Corr2 > 50), 3, 0) 
     dat_flag = dat_flag + xr.where((ds.Corr2 <= 50), 9, 0) 
     
-    dat_flag = dat_flag + xr.where((ds.Corr3 > 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr3 <= 70) & (ds.Corr3 > 50), 3, 0) 
+    dat_flag = dat_flag + xr.where((ds.Corr3 >= 70), 0, 0) 
+    dat_flag = dat_flag + xr.where((ds.Corr3 < 70) & (ds.Corr3 > 50), 3, 0) 
     dat_flag = dat_flag + xr.where((ds.Corr3 <= 50), 9, 0) 
     testCounter = testCounter + 3
     
@@ -355,7 +355,7 @@ def vectorFlag(ds):
     datFlagQartod = datFlagQartod + xr.where((flagAvg <= 4) & (flagAvg > 3), 4, 0)
     datFlagQartod = datFlagQartod + xr.where((flagAvg <= 3) & (flagAvg > 1), 3, 0)
     datFlagQartod = datFlagQartod + xr.where((flagAvg <= 1), 1, 0)
-    ds['DataFlag'] = (["time"], datFlagQartod)
+    ds['DataFlag'] = (["time"], datFlagQartod.values)
     ds['DataFlag'].attrs['Flag score'] = '[1, 3, 4, 9]'
     ds['DataFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Non-critical Fail, 9 = Critical Fail'
     ds['DataFlag'].attrs['Description'] = 'Flag grading system is based on QARTOD quality control parameters and tests in Nortek ADV user manual'
@@ -394,7 +394,7 @@ def vectorFlag(ds):
     senFlagQartod = senFlagQartod + xr.where((sen_flag > 1) & (sen_flag < 4), 3, 0)
     senFlagQartod = senFlagQartod + xr.where(sen_flag >= 4, 4, 0)
     
-    ds['SenFlag'] = (["time_sen"], sen_flag)
+    ds['SenFlag'] = (["time_sen"], senFlagQartod.values)
     ds['SenFlag'].attrs['Flag score'] = '[1, 3, 4]'
     ds['SenFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Fail'
     ds['SenFlag'].attrs['description'] = 'Flag value based on internal sensor tests: battery, heading, pitch and roll, temperature, and soundspeed. Sampled at 1Hz.'
