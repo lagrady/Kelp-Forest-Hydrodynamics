@@ -78,19 +78,6 @@ def ndbc_to_ds(datapath):
         ds[str(i[1])].attrs['units'] = var_units[i[0]+5] 
         ds[str(i[1])].attrs['description'] = var_desc[i[0]]
 
-    #Manually add ndbc metadata from their data portal
-    ds.attrs['Station'] = '46042'
-    ds.attrs['Owner'] = 'National Data Buoy Center'
-    ds.attrs['URL'] = 'https://www.ndbc.noaa.gov/station_page.php?station=46042'
-    ds.attrs['Latitude'] = 36.785
-    ds.attrs['Longitude'] = -122.396
-    ds.attrs['Air temp height'] = 3.7
-    ds.attrs['Anemometer height'] = 4.1
-    ds.attrs['Barometer elevation'] = 2.7
-    ds.attrs['Sea temp depth'] = -1.5
-    ds.attrs['Water depth'] = 1693
-    ds.attrs['Sample frequency'] = '10 minutes'
-
     return ds
 
 def m1_2d_reshape(filepath):
