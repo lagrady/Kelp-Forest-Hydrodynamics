@@ -1284,7 +1284,7 @@ def sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = 0,
     else:
         Sw_prime = (Sp * scaleFactor)
         
-    return Sw_prime
+    return Fp, Sw_prime
 
 #===============================================================================================================================
 def power_law(x, a, b):
@@ -1389,7 +1389,7 @@ def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=N
         burstPressure = ds.Pressure.where(ds.BurstNum.isin(burstNumber), drop=True)
         rho = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Density at adv during the burst
 
-        Sw_prime = sppConversion(burstPressure, rho, fs, nperseg, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = True)
+        Fw_Prime, Sw_prime = sppConversion(burstPressure, rho, fs, nperseg, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = True)
 
         #Define the lower cutoff frequency as the end of surface gravity wave band
         try:
