@@ -1287,13 +1287,50 @@ def sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = 0,
     return Fp, Sw_prime
 
 #===============================================================================================================================
+def waveSpectraDS(advData, Rho, fs, nperseg, ZpOffset = 0, ZvOffset = 0):
+    advDS = advData.copy(deep=True)
+    bursts = advDS.BurstCounter.values
+    pTS = np.empty((len(bursts), int(nperseg/2)))
+    
+    print('Converting pressure spectra')
+    #Convert each burst of pressure spectra to vertical velocity using linear wave theory
+    for i in enumerate(bursts):
+        print('Evaluating burst '+str(i[0]+1)+' of '+str(len(bursts)))
+        Pressure = advDS.Pressure.where(advDS.BurstNum.isin(i[1]), drop = True)
+        Fp, Sw_prime = vt.sppConversion(Pressure, Rho, 32, 32*60, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = False) 
+        pTS[i[0]] = Sw_prime[1:]
+    Tp = 1/Fp[1:] #First value is infinite, which is not compatible with matplotlib pcolormesh, so it's cut from the array
+    
+    print('Creating dataset')
+    #Create dataset
+    waveSpectra = xr.Dataset(
+        data_vars=dict(
+            data=(["time", "period"], pTS),
+        ),
+        coords=dict(
+            time=(["time"],advDS.time_start.data),
+            period=(["period"], Tp),
+        ),
+        attrs=dict(description="Pressure spectra over both adv deployments"),
+    )
+    
+    waveSpectra.attrs['Rho'] = Rho.values
+    waveSpectra.attrs['Sample Frequency'] = fs
+    waveSpectra.attrs['Segment Length'] = nperseg
+    waveSpectra.attrs['Pressure Sensor Offset'] = ZpOffset
+    waveSpectra.attrs['Velocity Beam Offset'] = ZvOffset
+    
+    return waveSpectra
+
+#===============================================================================================================================
 def power_law(x, a, b):
     return a*np.power(x, b)
 
 #===============================================================================================================================
 def kol_law(x,a):
     return a*np.power(x,(-5/3))
-#===================================================================================================================================================
+
+#================================================================================================================================
 def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=None, minimumGap=1, noiseFrequency = 3.1, ZpOffset = 0, ZvOffset = 0):
 
     ds = vecDS.copy(deep=True)

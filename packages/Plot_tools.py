@@ -185,4 +185,55 @@ def adcp_profile_plot(tempDS, adcpDS, velMax, velMin, binNums = [0,-1], tStart =
     
     if saveFig:
         plt.savefig(str(saveFig))
+        
+#=======================================================================================================================
+
+def wave_plot(waveSpectraDS, ST46042, ST46239, tStart, tEnd, rSamp, T_Range = None, saveFig = None): 
+
+    #Import offshore waveheight, average and dominant wave period, and mean wave direction
+    #Station 46042
+    WVHT_46042 = ST46042.WVHT.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+    APD_46042 = ST46042.APD.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+    MWD_46042 = ST46042.MWD.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+
+    #Station 46239
+    WVHT_46239 = ST46239.WVHT.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+    APD_46239 = ST46239.APD.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+    MWD_46239 = ST46239.MWD.sel(time = slice(tStart, tEnd)).resample(time = rSamp).mean().dropna(dim='time', how='all')
+
+    fig, axs = plt.subplots(3,1,constrained_layout = True, figsize = (8,8))
+
+    axs[0].set_title('Significant Wave Height from Offshore Buoys')
+    axs[0].plot(WVHT_46042.time, WVHT_46042, '-k', lw = 2, label = 'Station 46042')
+    axs[0].plot(WVHT_46239.time, WVHT_46239, '-r', lw = 2, label = 'Station 46239')
+    axs[0].set_ylim(0, 3)
+    axs[0].set_ylabel('Height (m)', size = 12)
+    axs[0].tick_params(axis = 'x', labelrotation = 15)
+    axs[0].margins(x=.01)
+    axs[0].legend(loc = 'upper right')
+
+    axs[1].set_title('Mean Wave Direction from Offshore Buoys')
+    axs[1].plot(MWD_46042.time, MWD_46042, '-k', lw = 2, label = 'Station 46042')
+    axs[1].plot(MWD_46239.time, MWD_46239, '-r', lw = 2, label = 'Station 46239')
+    axs[1].set_ylabel('Direction (Degrees)', size = 12)
+    axs[1].tick_params(axis = 'x', labelrotation = 15)
+    axs[1].margins(x=.01)
+
+    #bounds = np.array([1e-6, 2.5e-6, 5e-6, 7.5e-6, 1e-5, 2.5e-5, 5e-5, 7.5e-5, 1e-4])
+    #norm = matplotlib.colors.BoundaryNorm(boundaries=bounds, ncolors=256)
+    norm = matplotlib.colors.LogNorm(vmin = 5e-6, vmax = 1e-4)
+    axs[2].set_title('Average Wave Period from ADV Pressure Spectra and Offshore Buoys')
+    wavePlot = axs[2].pcolormesh(waveSpectraDS.time, waveSpectraDS.period, waveSpectraDS.data.T, 
+                                 norm = norm, cmap = 'viridis', shading = 'auto')
+    axs[2].plot(APD_46042.time, APD_46042, '-k', lw = 2, label = 'Station 46042')
+    axs[2].plot(APD_46239.time, APD_46239, '-r', lw = 2, label = 'Station 46239')
+    if T_Range:
+        axs[2].set_ylim(T_Range[0],T_Range[1])
+    axs[2].set_ylabel('Period (s)', size = 12)
+    axs[2].set_xlabel('Date', size = 12)
+    axs[2].tick_params(axis = 'x', labelrotation = 15)
+    cb = fig.colorbar(wavePlot, ax=axs[2], orientation='vertical').set_label(
+        label=r"$\frac{m^{2}}{s^{2}}$",size=14,rotation = -90, va = 'bottom')
     
+    if saveFig:
+        plt.savefig(str(saveFig))
