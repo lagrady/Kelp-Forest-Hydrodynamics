@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors
 import matplotlib.patches as mpatches
 from datetime import timedelta
+import re
 
 #Oceanography tools
 import gsw # https://teos-10.github.io/GSW-Python/gsw_flat.html
@@ -178,7 +179,7 @@ def vector_to_ds(datfile, vhdfile, senfile, fs):
             North = (["time"], dat['Velocity_North']),
             Up = (["time"], dat['Velocity_Up']),
             CSPD = (["time"], np.sqrt(((dat['Velocity_East'])**2) + ((dat['Velocity_North'])**2))),
-            CDIR = (["time"], vec_angle(dat['Velocity_East'].to_xarray(), dat['Velocity_North'].to_xarray())),
+            CDIR = (["time"], vec_angle(dat['Velocity_East'].to_xarray(), dat['Velocity_North'].to_xarray()).data),
             Amp1 = (["time"], dat['Amplitude_B1']),
             Amp2 = (["time"], dat['Amplitude_B2']),
             Amp3 = (["time"], dat['Amplitude_B3']),
@@ -196,7 +197,6 @@ def vector_to_ds(datfile, vhdfile, senfile, fs):
             time_sen=(["time_sen"], time_sen),
             time_start=(["time_start"], time_start)
         ),
-        attrs=dict(lat=36.56195999999164, lon=-121.94174126537672),
     )
     ds['time'] = pd.to_datetime(ds.time.values)
     print('Assigning dataset attributes')
@@ -398,6 +398,44 @@ def vectorFlag(ds):
     ds['SenFlag'].attrs['Flag score'] = '[1, 3, 4]'
     ds['SenFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Fail'
     ds['SenFlag'].attrs['description'] = 'Flag value based on internal sensor tests: battery, heading, pitch and roll, temperature, and soundspeed. Sampled at 1Hz.'
+    
+    return ds
+#===============================================================================================================================
+
+def vector_metadata(ds_trimmed, headerFile, metadata_list = None):
+    
+    ds = ds_trimmed.copy(deep=True)
+    
+    if metadata_list:
+        for m in metadata_list:
+            ds.attrs[m[0]] = m[1]
+    
+    headerlines = []
+
+    #Runs through all lines in the file and splits them by [attribute name, attribute value]
+    with open(headerFile) as f: 
+        for i in f.readlines():
+            line = i
+            line = line.strip('\n')
+            line = line.replace('(','')
+            line = line.replace(')','')
+            line = line.replace('Gyro/Accel', 'Gyro')
+            line = line.replace('Hz', '')
+            line = re.split(r'\s{2,}', line)
+
+
+            #Keep relevant vars, drop empty spaces
+            if len(line) >= 2:
+                headerlines.append(line)
+            else:
+                continue
+    for i in headerlines[:36]:
+        #Use try and except statement to make some metadata sections an int data type
+        #but switch it to a string if the section has letters present
+        try:
+            ds.attrs[str(i[0])] = int(i[1])
+        except:
+            ds.attrs[str(i[0])] = str(i[1])
     
     return ds
 
@@ -1287,40 +1325,51 @@ def sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = 0,
     return Fp, Sw_prime
 
 #===============================================================================================================================
-def waveSpectraDS(advData, Rho, fs, nperseg, ZpOffset = 0, ZvOffset = 0):
+def waveData(advData, Rho, fs, rSamp, nperseg, ZpOffset = 0, ZvOffset = 0):
     advDS = advData.copy(deep=True)
     bursts = advDS.BurstCounter.values
     pTS = np.empty((len(bursts), int(nperseg/2)))
+    Pressure_detrend = xr.zeros_like(advDS.Pressure)
     
     print('Converting pressure spectra')
     #Convert each burst of pressure spectra to vertical velocity using linear wave theory
     for i in enumerate(bursts):
         print('Evaluating burst '+str(i[0]+1)+' of '+str(len(bursts)))
         Pressure = advDS.Pressure.where(advDS.BurstNum.isin(i[1]), drop = True)
-        Fp, Sw_prime = vt.sppConversion(Pressure, Rho, 32, 32*60, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = False) 
+        Pressure_detrend[i[0]*len(Pressure):(i[0] + 1)*len(Pressure)] = signal.detrend(Pressure)
+        Fp, Sw_prime = vt.sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = False) 
         pTS[i[0]] = Sw_prime[1:]
     Tp = 1/Fp[1:] #First value is infinite, which is not compatible with matplotlib pcolormesh, so it's cut from the array
     
+    #Convert detrended pressure to changes in meters of seawater
+    H = (Pressure_detrend * 1000)/(Rho*9.81)
+    Hmean = H.resample(time = rSamp).mean()
+    Hstd = H.resample(time = rSamp).std()
+    
     print('Creating dataset')
     #Create dataset
-    waveSpectra = xr.Dataset(
+    waveData = xr.Dataset(
         data_vars=dict(
-            data=(["time", "period"], pTS),
+            waveSpectra=(["time", "period"], pTS.data),
+            Hmean=(["time"], Hmean.data),
+            Hstd=(["time"], Hstd.data),
         ),
         coords=dict(
             time=(["time"],advDS.time_start.data),
-            period=(["period"], Tp),
+            period=(["period"], Tp.data),
         ),
         attrs=dict(description="Pressure spectra over both adv deployments"),
     )
     
-    waveSpectra.attrs['Rho'] = Rho.values
-    waveSpectra.attrs['Sample Frequency'] = fs
-    waveSpectra.attrs['Segment Length'] = nperseg
-    waveSpectra.attrs['Pressure Sensor Offset'] = ZpOffset
-    waveSpectra.attrs['Velocity Beam Offset'] = ZvOffset
+    waveData.attrs['Rho'] = Rho.values
+    waveData.attrs['Sample Frequency'] = fs
+    waveData.attrs['Average Interval'] = rSamp
+    waveData.attrs['Segment Length'] = nperseg
+    waveData.attrs['Pressure Sensor Offset'] = ZpOffset
+    waveData.attrs['Velocity Beam Offset'] = ZvOffset
+    waveData.attrs['Velocity Beam Offset'] = ZvOffset
     
-    return waveSpectra
+    return waveData
 
 #===============================================================================================================================
 def power_law(x, a, b):
