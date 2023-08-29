@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors
 import xarray as xr
 
-def WinADCP_to_dataset(data_path):
+def WinADCP_to_dataset(data_path, depthOffset = 0):
     '''
     Load RDI ADCP text data file into xarray dataset.
     
@@ -84,7 +84,7 @@ def WinADCP_to_dataset(data_path):
     # Using variables from the cleaned dataframe, compress important data into arrays for xarray to read
     time = df['datetime']
     time = pd.to_datetime(time)
-    BinDist = np.arange(BlankDist,BlankDist+nbins*BinSize,BinSize)
+    BinDist = np.arange(BlankDist,BlankDist+nbins*BinSize,BinSize) + depthOffset
 
     Pitch = df['Pit'].to_numpy()
     Roll = df['Rol'].to_numpy()
@@ -214,7 +214,7 @@ def WinADCP_to_dataset(data_path):
     ds.attrs['First Ensemble Date'] = FirstEnsDate 
     ds.attrs['First Ensemble Time'] = FirstEnsTime
     ds.attrs['Ensemble Interval'] = EnsInterval
-    ds.attrs['1st Bin Range'] = BlankDist
+    ds.attrs['1st Bin Range'] = BlankDist + depthOffset
     ds.attrs['Bin Size'] = BinSize
     ds.attrs['RDI binary file'] = headerlines[1]
     ds.attrs['Instrument'] = headerlines[2]

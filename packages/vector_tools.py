@@ -466,7 +466,7 @@ def rotateVec(vector):
 
     #if in XYZ coordinates, try to convert to ENU coordinates before rotating
     #remember to propagate non-original data through
-    if v.attrs['coords'] == 'XYZ':
+    if v.attrs['Coordinate system'] == 'XYZ':
         v['Up'] = ('time',v.W.values)
         v['UpOrig'] = ('time',v.WOrig.values)
         try:
@@ -614,6 +614,24 @@ def despike(u, repeated, expand=False,expSize = 0.01,expEnd = 0.95):
     return (nan_sampleHold(u),detected,[u_lim1,du_lim1,du_lim2,du2_lim2,a_lim,b_lim,theta])
 
 #===============================================================================================================================
+def nan_helper(y):
+    """Helper to handle indices and logical indices of NaNs.
+
+    Input:
+        - y, 1d numpy array with possible NaNs
+    Output:
+        - nans, logical indices of NaNs
+        - index, a function, with signature indices= index(logical_indices),
+          to convert logical indices of NaNs to 'equivalent' indices
+    Example:
+        >>> # linear interpolation of NaNs
+        >>> nans, x= nan_helper(y)
+        >>> y[nans]= np.interp(x(nans), x(~nans), y[~nans])
+    """
+    #I got this from an internet forum, but lost the link
+
+    return np.isnan(y), lambda z: z.nonzero()[0]
+    
 def nan_interp(y):
     """Function to replace nans in a numpy array with interpolated values
     Input:
@@ -628,6 +646,36 @@ def nan_interp(y):
     if np.sum(nans) < nans.size:
         y2[nans] = np.interp(x(nans), x(~nans), y2[~nans])
     return y2
+ 
+def nan_sampleHold(y):
+    """
+    function to replace nans with the last valid point
+    based on 
+    https://stackoverflow.com/questions/41190852/most-efficient-way-to-forward-fill-nan-values-in-numpy-array/41191127
+    """
+
+    #find location of nans
+    mask = np.isnan(y)
+
+    #create array of indices (np.arange(mask.size)) with the locations with nans replaced by 0
+    idx = np.where(~mask,np.arange(mask.size),0)
+
+    #propagate any maximum forward (so any 0 replaced with the last non-zero index effectively!)
+    np.maximum.accumulate(idx, out=idx)
+
+    #use index to construct filled array
+    out = y[idx]
+
+    #if the first points where nan, replace them with the next valid data
+    out[np.isnan(out)] = out[np.where(~np.isnan(out))[0][0]]
+
+    return out
+
+def nanZero(y):
+    y[np.isnan(y)] = 0
+    return y
+    
+# endregion
 
 #===============================================================================================================================
 def despike_iterate(velocities,hz=16,lp=1/20,expand=True, plot=False,verbose=False,expSize = 0.01,expEnd = 0.95):
@@ -809,7 +857,7 @@ def despike_all(vector, fs, expand=False,lp=1/20,savefig=False,savePath=None,exp
     maxOut = str(v.BurstNum.max().values)
 
     #check what coordinate system we are working with
-    if v.attrs['coords'] == 'XYZ':
+    if v.attrs['Coordinate system'] == 'XYZ':
 
         #create new variables for storing what data is original
         v['UOrig'] = ('time',np.ones(v.time.shape,dtype='bool')) 
@@ -847,7 +895,7 @@ def despike_all(vector, fs, expand=False,lp=1/20,savefig=False,savePath=None,exp
             v.V[index] = Vrep
             v.W[index] = Wrep
 
-    elif v.attrs['coords'] == 'ENU':
+    elif v.attrs['Coordinate system'] == 'ENU':
 
         #create new variables for storing what data is original
         v['EOrig'] = ('time',np.ones(v.time.shape,dtype='bool'))
@@ -920,12 +968,12 @@ def cleanVec(vector,corrCutoff=0,snrCutoff=0,angleCutoff=10000):
         index[tilt>angleCutoff] = True
 
     #nan out data that failed the cutoff
-    if v.attrs['coords'] == 'XYZ':
+    if v.attrs['Coordinate system'] == 'XYZ':
         v.U[index] = np.nan
         v.V[index] = np.nan
         v.W[index] = np.nan 
 
-    if v.attrs['coords'] == 'ENU':
+    if v.attrs['Coordinate system'] == 'ENU':
         v.North[index] = np.nan
         v.East[index] = np.nan
         v.Up[index] = np.nan
@@ -952,7 +1000,7 @@ def ProcessVec(data, fs, badSections,reverse,expand = True,lp = 1/20,expSize = 0
     #expEnd is the density change cutoff for determining when to stop expanding the phase space cutoffs
 
     hz = fs
-    data['Depth'] = ('time', np.abs(gsw.conversions.z_from_p(data.Pressure.values,data.lat)))
+    data['Depth'] = ('time', np.abs(gsw.conversions.z_from_p(data.Pressure.values,data.Lat)))
 
     print('cleaning vector based on correlation and snr cutoffs')
 
@@ -1384,7 +1432,7 @@ def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=N
 
     ds = vecDS.copy(deep=True)
     tempData = tempDS.copy(deep=True)
-    fs = ds.attrs['Sampling_Rate']
+    fs = ds.attrs['Sampling rate']
     if selBurstNumbers:
         burstList = np.unique(selBurstNumbers)
     else:
