@@ -16,6 +16,7 @@ import re
 import gsw # https://teos-10.github.io/GSW-Python/gsw_flat.html
 from iapws import iapws95 #https://iapws.readthedocs.io/en/latest/iapws.iapws95.html
 from physoce import tseries as ts #https://github.com/physoce/physoce-py
+from physoce import oceans as oc
 
 #Scipy
 from scipy import integrate
@@ -246,6 +247,47 @@ def vector_to_ds(datfile, vhdfile, senfile, fs):
 #===============================================================================================================================
 def vectorFlag(ds):
     
+    # SENSOR TESTS 
+    # Tests for the quality of sensor parameters found on the .sen file
+    
+    testCounter = 0
+    
+    # Battery voltage test
+    BatVolt_flag = xr.where(ds.BatVolt >= 9.6, 1, 3) # xr.where(condition, value if true, value if false)
+    ds['BatVolt_Flag'] = (["time_sen"], BatVolt_flag.values)
+    ds['BatVolt_Flag'].attrs['description'] = '(Pass) Battery voltage >= 9.6 volts; (Suspect) < 9.6 volts'
+    testCounter = testCounter + 1
+    
+    # Compass Heading test
+    Heading_flag = xr.where((ds.Heading >= 0) & (ds.Heading <= 360), 1, 4)
+    ds['Heading_flag'] = (["time_sen"], Heading_flag.values)
+    ds['Heading_flag'].attrs['description'] = '(Pass) Heading from 0-360 degrees; (Fail) Outside of 0-360 degrees'
+    testCounter = testCounter + 1
+    
+    # Soundspeed test
+    SoundSpeed_flag = xr.where((ds.SoundSpeed >= 1493) & (ds.SoundSpeed <= 1502), 1, 4)
+    ds['SoundSpeed_flag'] = (["time_sen"], SoundSpeed_flag.values)
+    ds['SoundSpeed_flag'].attrs['description'] = '(Pass) SoundSpeed from 1493-1502 m/s; (Fail) Outside of range'
+    testCounter = testCounter + 1
+    
+    # Tilt test
+    #Tilt_flag = Tilt_flag + xr.where(, 1, 4)
+    #Tilt_flag = Tilt_flag + xr.where( < 5, 0, 4)
+    Tilt_flag = xr.where((np.abs(ds.Roll) > 5) | (np.abs(ds.Pitch) > 5), 4, 1)
+    ds['Tilt_flag'] = (["time_sen"], Tilt_flag.values)
+    ds['Tilt_flag'].attrs['description'] = '(Pass) Pitch or Roll <= 5 degrees; (Fail) > 5 degrees'
+    testCounter = testCounter + 1
+    
+    # Checksum tests
+    CheckSum_flag = xr.where(ds.ChecksumSen == 0, 1, 4)
+    ds['CheckSumSen_flag'] = (["time_sen"], CheckSum_flag.values)
+    ds['CheckSumSen_flag'].attrs['description'] = '(Pass) Checksum = 0 ; (Fail) Checksum != 0'
+    testCounter = testCounter + 1
+    
+    #senFlagQartod = senFlagQartod + xr.where(sen_flag <= 1, 1, 0)
+    #senFlagQartod = senFlagQartod + xr.where((sen_flag > 1) & (sen_flag < 4), 3, 0)
+    #senFlagQartod = senFlagQartod + xr.where(sen_flag >= 4, 4, 0)
+  
     print('Flagging data')
     dat_flag = xr.zeros_like(ds.East) # Same shape as .dat data arrays
     datFlagQartod = xr.zeros_like(dat_flag)
@@ -253,151 +295,183 @@ def vectorFlag(ds):
     burst_diff = np.diff(ds.BurstNum, axis = 0, prepend = 0)
     burst_diff[0] = 0
     
-    min_depth = int(np.mean(ds.Pressure) - (np.std(ds.Pressure)*1.5))
+    min_depth = int(np.mean(ds.Pressure) - (np.std(ds.Pressure)*2))
                        
     testCounter = 0                   
     
     # Checksum tests 
-    dat_flag = dat_flag + xr.where(ds.ChecksumDat == 0, 0, 9)
+    CheckSumDat_flag = xr.where(ds.ChecksumDat == 0, 1, 4)
+    ds['CheckSumDat_flag'] = (["time"], CheckSumDat_flag.values)
+    ds['CheckSumDat_flag'].attrs['description'] = '(Pass) Checksum = 0 ; (Fail) Checksum != 0'
     testCounter = testCounter + 1
                        
     # Pressure test
-    dat_flag = dat_flag + xr.where(ds.Pressure >= min_depth, 0, 9)
+    Pressure_flag = xr.where(ds.Pressure >= min_depth, 1, 3)
+    ds['Pressure_flag'] = (["time"], Pressure_flag.values)
+    ds['Pressure_flag'].attrs['description'] = '(Pass) Pressure >= above the minimum depth ; (Fail) Pressure below the minimum depth of deployment'
     testCounter = testCounter + 1
                        
     # SNR test
-    dat_flag = dat_flag + xr.where((ds.Snr1 < 10), 9, 0) # Full failure 
-    dat_flag = dat_flag + xr.where((ds.Snr2 < 10), 9, 0) 
-    dat_flag = dat_flag + xr.where((ds.Snr3 < 10), 9, 0) 
-    testCounter = testCounter + 3
+    #dat_flag = dat_flag + xr.where((ds.Snr1 < 10), 9, 0) # Full failure 
+    #dat_flag = dat_flag + xr.where((ds.Snr2 < 10), 9, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Snr3 < 10), 9, 0)
+    SNR_flag = xr.where((ds.Snr1 < 10)|(ds.Snr2 < 10)|(ds.Snr3 < 10), 4, 1)
+    ds['SNR_flag'] = (["time"], SNR_flag.values)
+    ds['SNR_flag'].attrs['description'] = '(Pass) SNR >= 10 dB ; (Fail) SNR < 10 dB'
+    testCounter = testCounter + 1
                        
     # Beam correlation test          
-    dat_flag = dat_flag + xr.where((ds.Corr1 >= 70), 0, 0) # Full pass condition
-    dat_flag = dat_flag + xr.where((ds.Corr1 < 70) & (ds.Corr1 > 50), 3, 0) # Not ideal but acceptable
-    dat_flag = dat_flag + xr.where((ds.Corr1 <= 50), 9, 0) # Full failure 
+    #dat_flag = dat_flag + xr.where((ds.Corr1 >= 70), 0, 0) # Full pass condition
+    #dat_flag = dat_flag + xr.where((ds.Corr1 < 70) & (ds.Corr1 > 50), 3, 0) # Not ideal but acceptable
+    #dat_flag = dat_flag + xr.where((ds.Corr1 <= 50), 9, 0) # Full failure 
     
-    dat_flag = dat_flag + xr.where((ds.Corr2 >= 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr2 < 70) & (ds.Corr2 > 50), 3, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr2 <= 50), 9, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Corr2 >= 70), 0, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Corr2 < 70) & (ds.Corr2 > 50), 3, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Corr2 <= 50), 9, 0) 
     
-    dat_flag = dat_flag + xr.where((ds.Corr3 >= 70), 0, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr3 < 70) & (ds.Corr3 > 50), 3, 0) 
-    dat_flag = dat_flag + xr.where((ds.Corr3 <= 50), 9, 0) 
-    testCounter = testCounter + 3
+    #dat_flag = dat_flag + xr.where((ds.Corr3 >= 70), 0, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Corr3 < 70) & (ds.Corr3 > 50), 3, 0) 
+    #dat_flag = dat_flag + xr.where((ds.Corr3 <= 50), 9, 0)
+    
+    Corr_flag = xr.where((ds.Corr1 < 60)|(ds.Corr2 < 60)|(ds.Corr3 < 60), 4, 0)
+    Corr_flag = Corr_flag + xr.where((((ds.Corr1 >= 60)&(ds.Corr1 < 70))|
+                                       ((ds.Corr2 >= 60)&(ds.Corr2 < 70))|
+                                       ((ds.Corr3 >= 60)&(ds.Corr3 < 70)))&
+                                       (Corr_flag != 4), 3, 0)
+    Corr_flag = Corr_flag + xr.where(((ds.Corr1 >= 70)|(ds.Corr2 >= 70)|(ds.Corr3 >= 70))&
+                                       ((Corr_flag != 4) & (Corr_flag != 3)), 1, 0)
+    ds['Corr_flag'] = (["time"], Corr_flag.values)
+    ds['Corr_flag'].attrs['description'] = '(Pass) Corr >= 70% ; (Suspect) Corr < 70% and >= 60%; (Fail) Corr < 60%'
+    
+    
+    testCounter = testCounter + 1
     
     # Horizontal velocity test
     # For East-West
-    dat_flag = dat_flag + xr.where(np.abs(ds.East) >= 3, 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(ds.East) < 3) & (np.abs(ds.East) >= 1), 3, 0)
-    dat_flag = dat_flag + xr.where(np.abs(ds.East) < 1, 0, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.East) >= 3, 4, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(ds.East) < 3) & (np.abs(ds.East) >= 1), 3, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.East) < 1, 0, 0)
+    
+    East_flag = xr.where(np.abs(ds.East) >= 2, 4, 0)
+    East_flag = East_flag + xr.where((np.abs(ds.East) < 2) & (np.abs(ds.East) >= 1), 3, 0)
+    East_flag = East_flag + xr.where(np.abs(ds.East) < 1, 1, 0)
+    ds['East_flag'] = (["time"], East_flag.values)
+    ds['East_flag'].attrs['description'] = '(Pass) East < 1m/s ; (Suspect) East >= 1m/s and < 2m/s; (Fail) East >= 2m/s'
+    
     testCounter = testCounter + 1                 
     
     # For North-South
-    dat_flag = dat_flag + xr.where(np.abs(ds.North) >= 3, 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(ds.North) < 3) & (np.abs(ds.North) >= 1), 3, 0)
-    dat_flag = dat_flag + xr.where(np.abs(ds.North) < 1, 0, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.North) >= 3, 4, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(ds.North) < 3) & (np.abs(ds.North) >= 1), 3, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.North) < 1, 0, 0)
+    
+    North_flag = xr.where(np.abs(ds.North) >= 2, 4, 0)
+    North_flag = North_flag + xr.where((np.abs(ds.North) < 2) & (np.abs(ds.North) >= 1), 3, 0)
+    North_flag = North_flag + xr.where(np.abs(ds.North) < 1, 1, 0)
+    ds['North_flag'] = (["time"], North_flag.values)
+    ds['North_flag'].attrs['description'] = '(Pass) North < 1m/s ; (Suspect) North >= 1m/s and < 2m/s; (Fail) North >= 2m/s'
+    
     testCounter = testCounter + 1 
           
     # Vertical velocity test
-    dat_flag = dat_flag + xr.where(np.abs(ds.Up) >= 2, 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(ds.Up) < 2) & (np.abs(ds.Up) >= 1), 3, 0)
-    dat_flag = dat_flag + xr.where(np.abs(ds.Up) < 1, 0, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.Up) >= 2, 4, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(ds.Up) < 2) & (np.abs(ds.Up) >= 1), 3, 0)
+    #dat_flag = dat_flag + xr.where(np.abs(ds.Up) < 1, 0, 0)
+    
+    Up_flag = xr.where(np.abs(ds.Up) >= 1, 4, 0)
+    Up_flag = Up_flag + xr.where((np.abs(ds.Up) < 1) & (np.abs(ds.Up) >= .5), 3, 0)
+    Up_flag = Up_flag + xr.where(np.abs(ds.Up) < .5, 1, 0)
+    ds['Up_flag'] = (["time"], Up_flag.values)
+    ds['Up_flag'].attrs['description'] = '(Pass) Up < .5m/s ; (Suspect) Up >= .5m/s and < 1m/s; (Fail) Up >= 1m/s'
+    
     testCounter = testCounter + 1 
       
     # u, v, w rate of change test
     # For East-west (u)
     du = np.diff(ds.East, axis = 0, prepend = 0) 
     du[0] = 0
-    dat_flag = dat_flag + xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(du) < 2) & (np.abs(du) >= 1) & (burst_diff==0), 3, 0)
-    dat_flag = dat_flag + xr.where((np.abs(du) < 1) & (np.abs(du) >= .25) & (burst_diff==0), 1, 0) 
+    EastAcceleration_flag = xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0)
+    EastAcceleration_flag = EastAcceleration_flag + xr.where((np.abs(du) < 2) & (np.abs(du) >= 1) & (burst_diff==0), 3, 0)
+    EastAcceleration_flag = EastAcceleration_flag + xr.where((np.abs(du) < 1) & (burst_diff==0), 1, 0) 
+    ds['EastAcceleration_flag'] = (["time"], EastAcceleration_flag)
+    ds['EastAcceleration_flag'].attrs['description'] = '(Pass) Eastern acceleration < 1m/s^2; (Suspect) >= 1m/s^2 and < 2m/s; (Fail) >= 2m/s'
     testCounter = testCounter + 1 
     
     # For North-South (v)
     dv = np.diff(ds.North, axis = 0, prepend = 0) 
     dv[0] = 0
-    dat_flag = dat_flag + xr.where((np.abs(dv) >= 2) & (burst_diff==0), 4, 0) 
-    dat_flag = dat_flag + xr.where((np.abs(dv) < 2) & (np.abs(dv) >= 1) & (burst_diff==0), 3, 0)
-    dat_flag = dat_flag + xr.where((np.abs(dv) < 1) & (np.abs(dv) >= .25) & (burst_diff==0), 1, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dv) >= 2) & (burst_diff==0), 4, 0) 
+    #dat_flag = dat_flag + xr.where((np.abs(dv) < 2) & (np.abs(dv) >= 1) & (burst_diff==0), 3, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dv) < 1) & (np.abs(dv) >= .25) & (burst_diff==0), 1, 0)
+    
+    NorthAcceleration_flag = xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0)
+    NorthAcceleration_flag = NorthAcceleration_flag + xr.where((np.abs(du) < 2) & (np.abs(du) >= 1) & (burst_diff==0), 3, 0)
+    NorthAcceleration_flag = NorthAcceleration_flag + xr.where((np.abs(du) < 1) & (burst_diff==0), 1, 0) 
+    ds['NorthAcceleration_flag'] = (["time"], NorthAcceleration_flag)
+    ds['NorthAcceleration_flag'].attrs['description'] = '(Pass) Northern Acceleration < 1m/s^2; (Suspect) >= 1m/s^2 and < 2m/s^2; (Fail) >= 2m/s^2'
     testCounter = testCounter + 1 
 
     # For vertical (w)
     dw = np.diff(ds.Up, axis = 0, prepend = 0) 
     dw[0] = 0
-    dat_flag = dat_flag + xr.where((np.abs(dw) >= 1) & (burst_diff==0), 4, 0) # Magnitudes of vertical velocity are typically smaller than horizontal velocity, so thresholds are reduced
-    dat_flag = dat_flag + xr.where((np.abs(dw) < 1) & (np.abs(dw) >= .5) & (burst_diff==0), 3, 0) 
-    dat_flag = dat_flag + xr.where((np.abs(dw) < .5) & (np.abs(dw) >= .15) & (burst_diff==0), 1, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dw) >= 1) & (burst_diff==0), 4, 0) # Magnitudes of vertical velocity are typically smaller than horizontal velocity, so thresholds are reduced
+    #dat_flag = dat_flag + xr.where((np.abs(dw) < 1) & (np.abs(dw) >= .5) & (burst_diff==0), 3, 0) 
+    #dat_flag = dat_flag + xr.where((np.abs(dw) < .5) & (np.abs(dw) >= .15) & (burst_diff==0), 1, 0)
+    
+    UpAcceleration_flag = xr.where((np.abs(du) >= 2) & (burst_diff==0), 4, 0)
+    UpAcceleration_flag = UpAcceleration_flag + xr.where((np.abs(du) < 2) & (np.abs(du) >= 1) & (burst_diff==0), 3, 0)
+    UpAcceleration_flag = UpAcceleration_flag + xr.where((np.abs(du) < 1) & (burst_diff==0), 1, 0) 
+    ds['UpAcceleration_flag'] = (["time"], UpAcceleration_flag)
+    ds['UpAcceleration_flag'].attrs['description'] = '(Pass) Upward Acceleration < 1m/s^2; (Suspect) >= 1m/s^2 and < 2m/s^2; (Fail) >= 2m/s^2'
+    
     testCounter = testCounter + 1 
        
     # Current speed test
-    dat_flag = dat_flag + xr.where(ds.CSPD < 4, 0, 3)
+    CSPD_flag = xr.where(ds.CSPD < 3, 1, 3)
+    ds['CSPD_flag'] = (["time"], CSPD_flag.values)
+    ds['CSPD_flag'].attrs['description'] = '(Pass) Horizontal current speed < 3m/s ; (Suspect) >= 3m/s'
     testCounter = testCounter + 1 
    
     # Current speed and direction rate of change tests
     dCSPD = np.diff(ds.CSPD, axis = 0, prepend = 0)
     dCSPD[0] = 0
-    dat_flag = dat_flag + xr.where((np.abs(dCSPD) >= 4) & (burst_diff==0), 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 4) & (np.abs(dCSPD) >= 1) & (burst_diff==0), 3, 0)
-    dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 1) & (np.abs(dCSPD) >= .25) & (burst_diff==0), 1, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dCSPD) >= 4) & (burst_diff==0), 4, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 4) & (np.abs(dCSPD) >= 1) & (burst_diff==0), 3, 0)
+    #dat_flag = dat_flag + xr.where((np.abs(dCSPD) < 1) & (np.abs(dCSPD) >= .25) & (burst_diff==0), 1, 0)
+    
+    CSPDAcceleration_flag = xr.where((np.abs(dCSPD) >= 3) & (burst_diff==0), 4, 0)
+    CSPDAcceleration_flag = CSPDAcceleration_flag + xr.where((np.abs(dCSPD) < 3) & (np.abs(dCSPD) >= 1) & (burst_diff==0), 3, 0)
+    CSPDAcceleration_flag = CSPDAcceleration_flag + xr.where((np.abs(dCSPD) < 1) & (burst_diff==0), 1, 0)
+    ds['CSPDAcceleration_flag'] = (["time"], CSPDAcceleration_flag)
+    ds['CSPDAcceleration_flag'].attrs['description'] = '(Pass) Current speed acceleration < 1m/s^2; (Suspect) >= 1m/s^2 and < 3m/s^2; (Fail) >= 3m/s^2'
+    
     testCounter = testCounter + 1 
 
     # For current direction
     dCDIR = np.diff(ds.CDIR, axis = 0, prepend = 0)
     dCDIR[0] = dCDIR[0] - dCDIR[0]
-    dat_flag = dat_flag + xr.where((np.abs(dCDIR) >= 135) & (np.abs(dCDIR) <= 225)& (burst_diff==0), 4, 0)
-    dat_flag = dat_flag + xr.where((np.abs(dCDIR) < 135) & (np.abs(dCDIR) >= 30) & (burst_diff==0), 3, 0)
-    dat_flag = dat_flag + xr.where((np.abs(dCDIR) <= 330) & (np.abs(dCDIR) > 225) & (burst_diff==0), 3, 0)
+    CDIR_flag = xr.where((np.abs(dCDIR) >= 135) & (np.abs(dCDIR) <= 225)& (burst_diff==0), 4, 0)
+    CDIR_flag = CDIR_flag + xr.where((np.abs(dCDIR) < 135) & (np.abs(dCDIR) >= 30) & (burst_diff==0), 3, 0)
+    CDIR_flag = CDIR_flag + xr.where((np.abs(dCDIR) <= 330) & (np.abs(dCDIR) > 225) & (burst_diff==0), 3, 0)
+    CDIR_flag = CDIR_flag + xr.where((CDIR_flag != 4)&(CDIR_flag != 3), 1, 0)
+    ds['CDIRdelta_flag'] = (["time"], CDIR_flag)
+    ds['CDIRdelta_flag'].attrs['description'] = '(Pass) Current speed direction change < 30 degrees; (Suspect) >= 30 and < 135 degrees; (Fail) >= 135 degrees'
+    
+    
     testCounter = testCounter + 1 
     
     # Add the new flag data array to the existing dataset
-    flagAvg = (dat_flag)/testCounter
-    datFlagQartod = datFlagQartod + xr.where(flagAvg > 4, 9, 0)
-    datFlagQartod = datFlagQartod + xr.where((flagAvg <= 4) & (flagAvg > 3), 4, 0)
-    datFlagQartod = datFlagQartod + xr.where((flagAvg <= 3) & (flagAvg > 1), 3, 0)
-    datFlagQartod = datFlagQartod + xr.where((flagAvg <= 1), 1, 0)
-    ds['DataFlag'] = (["time"], datFlagQartod.values)
-    ds['DataFlag'].attrs['Flag score'] = '[1, 3, 4, 9]'
-    ds['DataFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Non-critical Fail, 9 = Critical Fail'
-    ds['DataFlag'].attrs['Description'] = 'Flag grading system is based on QARTOD quality control parameters and tests in Nortek ADV user manual'
-    
-    print('Flagging sensor data')
-    # SENSOR TESTS 
-    # Tests for the quality of sensor parameters found on the .sen file  
-    
-    sen_flag = xr.zeros_like(ds.BatVolt) # Same shape as .sen data arrays
-    senFlagQartod = xr.zeros_like(sen_flag)
-    
-    testCounter = 0
-    
-    # Battery voltage test
-    sen_flag = sen_flag + xr.where(ds.BatVolt >= 9.6, 0, 3) # xr.where(condition, value if true, value if false)
-    testCounter = testCounter + 1
-    
-    # Compass Heading test
-    sen_flag = sen_flag + xr.where((ds.Heading >= 0) & (ds.Heading <= 360), 0, 4)
-    testCounter = testCounter + 1
-    
-    # Soundspeed test
-    sen_flag = sen_flag + xr.where((ds.SoundSpeed >= 1493) & (ds.SoundSpeed <= 1502), 0, 4)
-    testCounter = testCounter + 1
-    
-    # Tilt test
-    sen_flag = sen_flag + xr.where(np.abs(ds.Roll) < 5, 0, 4)
-    sen_flag = sen_flag + xr.where(np.abs(ds.Pitch) < 5, 0, 4)
-    testCounter = testCounter + 1
-    
-    # Checksum tests
-    sen_flag = sen_flag + xr.where(ds.ChecksumSen == 0, 0, 4) 
-    testCounter = testCounter + 1
-    
-    senFlagQartod = senFlagQartod + xr.where(sen_flag <= 1, 1, 0)
-    senFlagQartod = senFlagQartod + xr.where((sen_flag > 1) & (sen_flag < 4), 3, 0)
-    senFlagQartod = senFlagQartod + xr.where(sen_flag >= 4, 4, 0)
-    
-    ds['SenFlag'] = (["time_sen"], senFlagQartod.values)
-    ds['SenFlag'].attrs['Flag score'] = '[1, 3, 4]'
-    ds['SenFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Fail'
-    ds['SenFlag'].attrs['description'] = 'Flag value based on internal sensor tests: battery, heading, pitch and roll, temperature, and soundspeed. Sampled at 1Hz.'
+    #flagAvg = (dat_flag)/testCounter
+    #datFlagQartod = datFlagQartod + xr.where(flagAvg > 4, 9, 0)
+    #datFlagQartod = datFlagQartod + xr.where((flagAvg <= 4) & (flagAvg > 3), 4, 0)
+    ##datFlagQartod = datFlagQartod + xr.where((flagAvg <= 3) & (flagAvg > 1), 3, 0)
+    #datFlagQartod = datFlagQartod + xr.where((flagAvg <= 1), 1, 0)
+    #ds['DataFlag'] = (["time"], datFlagQartod.values)
+    #ds['DataFlag'].attrs['Flag score'] = '[1, 3, 4, 9]'
+    #ds['DataFlag'].attrs['Grade definition'] = '1 = Pass, 3 = Suspect, 4 = Non-critical Fail, 9 = Critical Fail'
+    ds.attrs['Flag score'] = '[1, 3, 4]'
+    ds.attrs['Grade definition'] = 'Pass = 1; Suspect = 3; Fail = 4'
+    ds.attrs['Flag description'] = 'Flag grading system is based on QARTOD quality control parameters and tests in Nortek ADV user manual'
     
     return ds
 #===============================================================================================================================
@@ -443,16 +517,6 @@ def vector_metadata(ds_trimmed, headerFile, metadata_list = None):
 #=============================================== DESPIKING AND CLEANING FUNCTIONS ==============================================
 #===============================================================================================================================
 
-def findPrincaxs(u,v):
-    # THE FOLLOWING CODE IS ADAPTED FROM STEVEN CUNNINGHAM'S MASTERS THESIS (2019)
-
-    # Rotate velocity data along the principle axes U and V
-    theta, major, minor = ts.princax(u, v) # theta = angle, major = SD major axis (U), SD minor axis (V)
-    U, V = ts.rot(u, v, theta)
-    
-    return U,V,theta
-
-#===============================================================================================================================
 def rotateVec(vector):
 
     #rotate vector data to the principal axis
@@ -483,25 +547,31 @@ def rotateVec(vector):
 
     if ENU == 1:
         # Using principle component analysis to rotate data to uncorrelated axes
-        #[theta, primary, secondary] = PCrotate(v.East.values + 1j * v.North.values)
-        primary,secondary,theta = findPrincaxs(v.East.values, v.North.values)
+        theta, major, minor = ts.princax(v.East, v.North) # theta = angle, major = SD major axis (U), SD minor axis (V)
+        secondary, primary = ts.rot(v.East, v.North, -theta-90) #Theta is set so that primary is on y-axis and secondary is x-axis
         orig = np.logical_and(v.EOrig.values,v.NOrig.values)
     else:
         # Using principle component analysis to rotate data to uncorrelated axes
-        #[theta, primary, secondary] = PCrotate(v.U.values + 1j * v.V.values)
-        primary,secondary,theta = findPrincaxs(v.U.values, v.V.values)
-        orig = np.logical_and(v.UOrig.values,v.VOrig.values)
+        theta, major, minor = ts.princax(v.U, v.V) # theta = angle, major = SD major axis (U), SD minor axis (V)
+        secondary, primary = ts.rot(v.U, v.V, -theta-90) #Theta is set so that primary is on y-axis and secondary is x-axis
+        orig = np.logical_and(v.UOrig,v.VOrig)
 
     # store angle of rotation as attribute and new vectors as primary and secondary
     # velocities in dataset
-    v.attrs['Theta'] = theta
+    v.attrs['Theta'] = -theta-90
     v['Primary'] = ('time',primary)
+    v.Primary.attrs['Std.'] = major
     v.Primary.attrs['units'] = 'm/s'
     v['Secondary'] = ('time',secondary)
+    v.Secondary.attrs['Std.'] = minor
     v.Secondary.attrs['units'] = 'm/s'
     
     v['PrimaryOrig'] = ('time',orig)
+    v['PrimaryOrig'].attrs['Description'] = 'Original data mask for primary velocity component that combines EOrig and NOrig'
+    v['PrimaryOrig'].attrs['Conditions'] = 'True = unaltered data; False = Despiked or removed data due to failing qc tests'
     v['SecondaryOrig'] = ('time',orig)
+    v['SecondaryOrig'].attrs['Description'] = 'Original data mask for secondary velocity componentthat combines EOrig and NOrig'
+    v['SecondaryOrig'].attrs['Conditions'] = 'True = unaltered data; False = Despiked or removed data due to failing qc tests'
 
     return v
 
@@ -899,8 +969,11 @@ def despike_all(vector, fs, expand=False,lp=1/20,savefig=False,savePath=None,exp
 
         #create new variables for storing what data is original
         v['EOrig'] = ('time',np.ones(v.time.shape,dtype='bool'))
-        v['NOrig'] = ('time',np.ones(v.time.shape,dtype='bool'))  
-        v['UpOrig'] = ('time',np.ones(v.time.shape,dtype='bool')) 
+        v['EOrig'].attrs['Description'] = 'True = original data point; False = despiked data point (unoriginal)'
+        v['NOrig'] = ('time',np.ones(v.time.shape,dtype='bool'))
+        v['NOrig'].attrs['Description'] = 'True = original data point; False = despiked data point (unoriginal)'
+        v['UpOrig'] = ('time',np.ones(v.time.shape,dtype='bool'))
+        v['UpOrig'].attrs['Description'] = 'True = original data point; False = despiked data point (unoriginal)'
 
         #loop through all bursts
         for i in v.BurstCounter.values.astype('int'):
@@ -948,11 +1021,19 @@ def cleanVec(vector,corrCutoff=0,snrCutoff=0,angleCutoff=10000):
     index[np.logical_or(np.logical_or(v.Corr1.values < corrCutoff, \
                                  v.Corr2.values < corrCutoff), \
                                  v.Corr3.values < corrCutoff)] = True
+    
+    corrMask = np.where((v.Corr1 < corrCutoff) |
+                        (v.Corr2 < corrCutoff) |
+                        (v.Corr3 < corrCutoff), False, True)
 
     #find where snr cutoff fails
     index[np.logical_or(np.logical_or(v.Snr1.values < snrCutoff, \
                                  v.Snr2.values < snrCutoff), \
                                  v.Snr3.values < snrCutoff)] = True
+    
+    snrMask = np.where((v.Snr1 < snrCutoff) |
+                       (v.Snr2 < snrCutoff) |
+                       (v.Snr3 < snrCutoff), False, True)
 
     #if angle is too big, assume we don't have trustworthy tilt information
     if np.abs(angleCutoff) < 2*np.pi:
@@ -966,7 +1047,9 @@ def cleanVec(vector,corrCutoff=0,snrCutoff=0,angleCutoff=10000):
 
         #find where angle cutoff fails
         index[tilt>angleCutoff] = True
-
+        
+        tiltMask = np.where(tilt > angleCutoff, False, True)
+        
     #nan out data that failed the cutoff
     if v.attrs['Coordinate system'] == 'XYZ':
         v.U[index] = np.nan
@@ -983,11 +1066,17 @@ def cleanVec(vector,corrCutoff=0,snrCutoff=0,angleCutoff=10000):
     v.attrs['SnrCutoff'] = snrCutoff
     v.attrs['AngleCutoff'] = angleCutoff
     
-    return v
+    #True = passes all qc tests; False = fails one or more qc tests
+    qcMaskInitial = np.logical_and(corrMask, snrMask)
+    qcMaskFinal = np.logical_and(qcMaskInitial, tiltMask)
+    
+    #v['qcMask'] = (['time'], qcMaskFinal)
+    #v['qcMask'].attrs['Description'] = 'True = data that passes correlation/snr/tilt tests; False = data that fails'
+    
+    return v, qcMaskFinal
 #===============================================================================================================================
-def ProcessVec(data, fs, badSections,reverse,expand = True,lp = 1/20,expSize = 0.01,expEnd = 0.95):
-    #initial processing of adv data. adjusts pressure,
-    #calculates depth, eliminates bad data due to
+def ProcessVec(data, badSections, corrCutoff, snrCutoff, tiltCutoff, reverse=False,expand = True,lp = 1/20,expSize = 0.01,expEnd = 0.95):
+    #initial processing of adv data. eliminates bad data due to
     #bad time step, out of water transitions, snr,
     #correlation, and despiking
     #
@@ -999,14 +1088,13 @@ def ProcessVec(data, fs, badSections,reverse,expand = True,lp = 1/20,expSize = 0
     #expSize is the step size for expanding the cutoff in the expanding cutoff algorithm
     #expEnd is the density change cutoff for determining when to stop expanding the phase space cutoffs
 
-    hz = fs
-    data['Depth'] = ('time', np.abs(gsw.conversions.z_from_p(data.Pressure.values,data.Lat)))
+    hz = data.attrs['Sampling rate']
 
     print('cleaning vector based on correlation and snr cutoffs')
 
     #use correlation and snr cutoffs to clean data
-    data_temp = cleanVec(data,corrCutoff=60,snrCutoff=10)
-
+    data_temp, qcMask = cleanVec(data,corrCutoff=corrCutoff,snrCutoff=snrCutoff,angleCutoff=tiltCutoff)
+    
 
     print('despiking vector')
 
@@ -1026,6 +1114,17 @@ def ProcessVec(data, fs, badSections,reverse,expand = True,lp = 1/20,expSize = 0
         data_temp_All.North[ind] = np.nan
         data_temp_All.Up[ind] = np.nan
     
+    #Combine Despike masks with qc masks
+    data_temp_All['EOrig'] = (['time'], np.logical_and(data_temp_All.EOrig.values, qcMask))
+    data_temp_All['EOrig'].attrs['Description'] = 'Original data mask for eastern velocity'
+    data_temp_All['EOrig'].attrs['Conditions'] = 'True = unaltered data; False = Despiked or removed data due to failing qc tests'
+    data_temp_All['NOrig'] = (['time'], np.logical_and(data_temp_All.NOrig.values, qcMask))
+    data_temp_All['NOrig'].attrs['Description'] = 'Original data mask for northern velocity'
+    data_temp_All['NOrig'].attrs['Conditions'] = 'True = unaltered data; False = Despiked or removed data due to failing qc tests'
+    data_temp_All['UpOrig'] = (['time'], np.logical_and(data_temp_All.UpOrig.values, qcMask))
+    data_temp_All['UpOrig'].attrs['Description'] = 'Original data mask for vertical velocity'
+    data_temp_All['UpOrig'].attrs['Conditions'] = 'True = unaltered data; False = Despiked or removed data due to failing qc tests'
+    
     print('rotating vectors')
     
     data_temp_All = rotateVec(data_temp_All)
@@ -1034,75 +1133,50 @@ def ProcessVec(data, fs, badSections,reverse,expand = True,lp = 1/20,expSize = 0
         print('reversing direction so primary is in flooding direction')
         data_temp_All.Primary[:] = -data_temp_All.Primary[:]
         data_temp_All.Secondary[:] = -data_temp_All.Secondary[:]
-        data_temp_All.attrs['Theta'] = data_temp_All.Theta - np.pi
     
-    print('re-adding raw velocity data')
+    print('Adding bad data ratios to dataset')
+    #Add bad data ratios to the dataset
+    n = data_temp_All.attrs['Samples per burst'] #Total number of samples per burst
+    EbadPoints = data_temp_All.BurstNum.where(data_temp_All.EOrig==False).dropna(dim='time', how = 'all')
+    NbadPoints = data_temp_All.BurstNum.where(data_temp_All.NOrig==False).dropna(dim='time', how = 'all')
+    UpbadPoints = data_temp_All.BurstNum.where(data_temp_All.UpOrig==False).dropna(dim='time', how = 'all')
+    PbadPoints = data_temp_All.BurstNum.where(data_temp_All.PrimaryOrig==False).dropna(dim='time', how = 'all')
+    SbadPoints = data_temp_All.BurstNum.where(data_temp_All.SecondaryOrig==False).dropna(dim='time', how = 'all')
     
-    data_temp_All["EastRaw"] = (["time"], data.East)
-    data_temp_All["EastRaw"].attrs['Description'] = 'Eastern velocity from original, unfiltered dataset'
-    data_temp_All["NorthRaw"] = (["time"], data.North)
-    data_temp_All["NorthRaw"].attrs['Description'] = 'Northern velocity from original, unfiltered dataset'
-    data_temp_All["UpRaw"] = (["time"], data.Up)
-    data_temp_All["UpRaw"].attrs['Description'] = 'Vertical velocity from original, unfiltered dataset'
+    data_temp_All.coords["burst"] = (["burst"], data_temp_All.BurstCounter.values)
+    data_temp_All["EOrigRatio"] = (['burst'], np.unique(EbadPoints, return_counts=True)[1]/n)
+    data_temp_All["EOrigRatio"].attrs['Description'] = 'Ratio of bad data points out of max number of samples'
+    data_temp_All["NOrigRatio"] = (['burst'], np.unique(NbadPoints, return_counts=True)[1]/n)
+    data_temp_All["NOrigRatio"].attrs['Description'] = 'Ratio of bad data points out of max number of samples'
+    data_temp_All["UpOrigRatio"] = (['burst'], np.unique(UpbadPoints, return_counts=True)[1]/n)
+    data_temp_All["UpOrigRatio"].attrs['Description'] = 'Ratio of bad data points out of max number of samples'
+    data_temp_All["PrimOrigRatio"] = (['burst'], np.unique(PbadPoints, return_counts=True)[1]/n)
+    data_temp_All["PrimOrigRatio"].attrs['Description'] = 'Ratio of bad data points out of max number of samples'
+    data_temp_All["SecOrigRatio"] = (['burst'], np.unique(SbadPoints, return_counts=True)[1]/n)
+    data_temp_All["SecOrigRatio"].attrs['Description'] = 'Ratio of bad data points out of max number of samples'
     
-    print('finding fraction of unoriginal data in each burst')
-    
-    #Initialize boolean vectors of unoriginal points for velocities
-    EOrig = data_temp_All.EOrig
-    NOrig = data_temp_All.NOrig
-    UpOrig = data_temp_All.UpOrig
-    PrimOrig = data_temp_All.PrimaryOrig
-    SecOrig = data_temp_All.SecondaryOrig
-    
-    data_temp_All = badDataRatio(data_temp_All, EOrig, 'dEast')
-    data_temp_All = badDataRatio(data_temp_All, NOrig, 'dNorth')
-    data_temp_All = badDataRatio(data_temp_All, UpOrig, 'dUp')
-    data_temp_All = badDataRatio(data_temp_All, PrimOrig, 'dPrimary')
-    data_temp_All = badDataRatio(data_temp_All, SecOrig, 'dSecondary')
+    print('Adding raw velocities to dataset')
+    #Re-add back the original, unaltered velocities to the dataset for future gap repairs
+    data_temp_All['EastRaw'] = data.East
+    data_temp_All['EastRaw'].attrs['Description'] = 'The unaltered eastern velocity'
+    data_temp_All['EastRaw'].attrs['Units'] = 'm/s'
 
+    data_temp_All['NorthRaw'] = data.North
+    data_temp_All['NorthRaw'].attrs['Description'] = 'The unaltered northern velocity'
+    data_temp_All['NorthRaw'].attrs['Units'] = 'm/s'
+
+    data_temp_All['UpRaw'] = data.Up
+    data_temp_All['UpRaw'].attrs['Description'] = 'The unaltered vertical velocity'
+    data_temp_All['UpRaw'].attrs['Units'] = 'm/s'
+    
+    #Add the final metadata to the dataset
+    data_temp_All.attrs['Description'] = 'Despiked data with low correlation/snr and high tilt points removed' 
     data_temp_All.attrs['despike_lp_freq (hz)'] = lp
     data_temp_All.attrs['despike_cutoff_expansion_fraction'] = expSize
     data_temp_All.attrs['despike_cutoff_expansion_densityChange_end_condition'] = expEnd
 
     return data_temp_All
     
-#===============================================================================================================================
-def badDataRatio(data, velCompBool, newVarName):
-    
-    #Max number of samples within a single burst
-    nmax = data.NoVelSamples.values[0]
-    
-    #Find and drop all bad datapoints within BurstNum
-    goodData = data.BurstNum.where(velCompBool==True, drop=True)
-    
-    #Create array of remaining datapoints within each burst
-    remBursts = np.unique(goodData, return_counts = True)
-    
-    #Bursts with 0 good points get dropped, making the array uneven with dataset dimensions
-    #Dropped bursts must be manually added back to the array to make complete
-    #Find difference between unaltered dataset and remBurst to see which bursts get compeletely wiped
-    a = np.setdiff1d(data.BurstNum.values,remBursts[0])
-    
-    #Manually create an array of zeros for each of the wiped bursts and merge the two
-    b = np.zeros_like(a)
-    badBursts = np.array((a,b))
-    
-    #Append remBursts with badBursts to make an array with matching dimensions to dataset
-    badData = np.append(remBursts, badBursts, axis=1).astype(int)
-    
-    #Sort bursts so that indices of badBursts are in temporal order (i.e burst # 1, 2, 3...95, 96)
-    sort = np.argsort(badData[0])
-    badData = badData[1][sort]
-    
-    #Calculate ratio of bad data to max number of samples per burst
-    badDataRatio = (nmax-badData)/nmax #Also knowns as dSS and dCorr in Feddersen (2010)
-    
-    #Add badDataRatio to the dataset
-    data.coords["burst"] = (["burst"], data.BurstCounter.values)
-    data[str(newVarName)] = (["burst"], badDataRatio)
-    data[str(newVarName)].attrs['Description'] = 'Ratio of bad data points to the total burst size for despiked velocity'
-    
-    return data
 #===============================================================================================================================
 def fullInterpVec(data):
     
@@ -1153,81 +1227,68 @@ def patchVec(data, fs):
     
     return dsPatch
 #===============================================================================================================================
-def interpAvgVec(data, fs):
+def InterpAvg_ADV(ADVdata, interpTimeDelta = 1, reversePrincVel = False):
     
-    ds = data.copy(deep=True)
+    ds = ADVdata.copy(deep=True)
+    fs = ds.attrs['Sampling rate']
 
-    ds['EOrig'] = missingValE = xr.where((ds.EOrig==False) | (ds.East.isnull()==True), False, True)
-    ds['NOrig'] = missingValN = xr.where((ds.NOrig==False) | (ds.North.isnull()==True), False, True)
-    ds['UpOrig'] = missingValUp = xr.where((ds.UpOrig==False) | (ds.Up.isnull()==True), False, True)
-    ds['PrimaryOrig'] = missingValPrim = xr.where((ds.PrimaryOrig==False) | (ds.Primary.isnull()==True), False, True)
-    ds['SecondaryOrig'] = missingValSec = xr.where((ds.SecondaryOrig==False) | (ds.Secondary.isnull()==True), False, True)
-    
+    #First interpolate all gaps <= 1s
     print('Interpolating gaps <= 1s')
-    delta = timedelta(seconds=1 + (2/fs)) #Maximum gap of 1 second (2/fs ensures that points right at the margin are taken into account)
-    dsInt = ds.interpolate_na(dim="time", method="linear", max_gap = delta) #Linearly interpolates across gaps up to a limit denoted by time delta
-    
-    print('Evaluating ratio of nans leftover in the dataset')
-    #Evaluate the numer of nans in each dataset for future qc
-    badDataRatio(dsInt, missingValE, 'dNorth')
-    badDataRatio(dsInt, missingValN, 'dEast')
-    badDataRatio(dsInt, missingValUp, 'dUp')
-    badDataRatio(dsInt, missingValPrim, 'dPrimary')
-    badDataRatio(dsInt, missingValSec, 'dSecondary')     
-       
-    print('Organzing remaining gaps > 1s')
-    
-    gapTimes = dsInt.time.where(dsInt.East.isnull() == True, drop = True).values #Generate a dataset with all leftover uninterpolated gaps
-    
-    #Find differences between gaps to assess which ranges are non-sequential
-    tDiff = np.diff(gapTimes) 
-    gapRanges = np.split(gapTimes, np.where(tDiff > np.timedelta64(int(1000000000/fs), 'ns'))[0]+1)
-    
-    print('Generating interpolated/averaged data')
+    delta = timedelta(seconds=interpTimeDelta + (2/fs)) #Maximum gap of 1 second (2/fs ensures that points right at the margin are taken into account)
 
-    EAvg = np.empty(len(gapRanges))
-    NAvg = np.empty(len(gapRanges))
-    UpAvg = np.empty(len(gapRanges))
+    #Linearly interpolate across gaps up to a limit denoted by time delta
+    ds['East'] = ds.East.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
+    ds['North'] = ds.North.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
+    ds['Up'] = ds.Up.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
+
+    print('Averaging gaps > 1s')
+    #Average the rest of the longer gaps
+    EgapTimes = ds.time.where(ds.East.isnull()==True).dropna(dim='time',how='all')
+    EgapIDX = np.where(ds.time.isin(EgapTimes))[0]
+    EgapDiff = np.diff(EgapIDX, prepend = EgapIDX[0])
+    EgapRanges = np.split(EgapIDX, np.where(EgapDiff > 1)[0])
+    for i in np.arange(len(EgapRanges)):
+        ds.East[EgapRanges[i][0]:EgapRanges[i][-1]+1] = ds.EastRaw[EgapRanges[i][0]:EgapRanges[i][-1]+1].mean()
     
-    for i in range(len(gapRanges)):
-        EAvg[i] = dsInt.EastRaw.sel(time = slice(gapRanges[i][0], gapRanges[i][-1])).values.mean()
-        NAvg[i] = dsInt.NorthRaw.sel(time = slice(gapRanges[i][0], gapRanges[i][-1])).values.mean()
-        UpAvg[i] = dsInt.UpRaw.sel(time = slice(gapRanges[i][0], gapRanges[i][-1])).values.mean()
+    NgapTimes = ds.time.where(ds.North.isnull()==True).dropna(dim='time',how='all')
+    NgapIDX = np.where(ds.time.isin(NgapTimes))[0]
+    NgapDiff = np.diff(NgapIDX, prepend = NgapIDX[0])
+    NgapRanges = np.split(NgapIDX, np.where(NgapDiff > 1)[0])
+    for i in np.arange(len(NgapRanges)):
+        ds.North[NgapRanges[i][0]:NgapRanges[i][-1]+1] = ds.NorthRaw[NgapRanges[i][0]:NgapRanges[i][-1]+1].mean()
     
-    EastAvgArr = xr.zeros_like(dsInt.East)
-    NorthAvgArr = xr.zeros_like(dsInt.North)
-    UpAvgArr = xr.zeros_like(dsInt.Up)
+    UpgapTimes = ds.time.where(ds.Up.isnull()==True).dropna(dim='time',how='all')
+    UpgapIDX = np.where(ds.time.isin(UpgapTimes))[0]
+    UpgapDiff = np.diff(UpgapIDX, prepend = UpgapIDX[0])
+    UpgapRanges = np.split(UpgapIDX, np.where(UpgapDiff > 1)[0])
+    for i in np.arange(len(UpgapRanges)):
+        ds.Up[UpgapRanges[i][0]:UpgapRanges[i][-1]+1] = ds.UpRaw[UpgapRanges[i][0]:UpgapRanges[i][-1]+1].mean()
     
-    for i in range(len(gapRanges)):
-        EastAvgArr = EastAvgArr + xr.where(dsInt.time.isin(gapRanges[i]), EAvg[i], 0)
-        NorthAvgArr = NorthAvgArr + xr.where(dsInt.time.isin(gapRanges[i]), NAvg[i], 0)
-        UpAvgArr = UpAvgArr + xr.where(dsInt.time.isin(gapRanges[i]), UpAvg[i], 0)
-        print(str(i)+' out of '+str(len(gapRanges)))
+    #Recalculating variables that are effected by altered velocities
+    print('Recalculating CSPD and CDIR')
+    ds['CSPD'] = (["time"], np.sqrt((ds.East.values**2) + (ds.North.values**2)))
+    ds['CDIR'] = (["time"], vec_angle(ds.East, ds.North).data)
+    
+    print('Recalculating principle velocities')
+    dsFinal = rotateVec(ds)
+    
+    if reversePrincVel:
+        print('reversing direction so primary is in flooding direction')
+        dsFinal.Primary[:] = -dsFinal.Primary[:]
+        dsFinal.Secondary[:] = -dsFinal.Secondary[:]
         
-    #dsInt.coords['timeInterp'] = (["timeInterp"], dsInt.time)
-    dsInt["East"] = (["time"],xr.where(EastAvgArr != 0, EastAvgArr, dsInt.East))
-    dsInt["North"] = (["time"],xr.where(NorthAvgArr != 0, NorthAvgArr, dsInt.North))
-    dsInt["Up"] = (["time"],xr.where(UpAvgArr != 0, UpAvgArr, dsInt.Up))
-    
-    dsInt = dsInt.ffill("time")
-    dsInt = dsInt.bfill("time")
-    
-    primary, secondary, theta = rotateVec(dsInt.East, dsInt.North)
-    
-    dsInt["Primary"] = (["time"],primary)
-    dsInt["Secondary"] = (["time"],-secondary)
-    dsInt.attrs["Theta"] = theta
-    
-    return dsInt
+    return dsFinal
 
 #===============================================================================================================================
 #=============================================== DISSIPATION ESTIMATION FUNCTIONS ==============================================
 #===============================================================================================================================
 
-def JlmIntegral(data):
-    ds = data.copy(deep=True)
+def JlmIntegral(ADVdata):
+    ds = ADVdata.copy(deep=True)
     burst_list = np.unique(ds.BurstNum.values)
-    J_arr = np.empty((len(burst_list),3))
+    J11_arr = np.empty(len(burst_list))
+    J22_arr = np.empty(len(burst_list))
+    J33_arr = np.empty(len(burst_list))
     
     # Initialize all variables theta, phi, and R within boundaries a to b
     phi = np.linspace(0, 2*np.pi, 1000)
@@ -1288,12 +1349,25 @@ def JlmIntegral(data):
         J_22 = (1/(2*((2*np.pi)**(3/2))))*(1/(usig*vsig*wsig)) * np.trapz(fTheta_22, theta)
         J_33 = (1/(2*((2*np.pi)**(3/2))))*(1/(usig*vsig*wsig)) * np.trapz(fTheta_33, theta)
         
-        J_arr[b[0]] = [J_11,J_22,J_33]
+        J11_arr[b[0]] = J_11
+        J22_arr[b[0]] = J_22
+        J33_arr[b[0]] = J_33
         
-    print('Creating Dataframe')
-    JlmDF = pd.DataFrame(J_arr, index = burst_list, columns=['J_11', 'J_22', 'J_33'])
         
-    return JlmDF
+    print('Adding wavespace integral to dataset')
+    ds['J11'] = (['burst'],J11_arr)
+    ds['J11'].attrs['Description'] = 'The wavespace integral used in equation A13 of Gerbi et al. (2009)'
+    ds['J11'].attrs['Direction'] = 'Primary'
+    
+    ds['J22'] = (['burst'],J22_arr)
+    ds['J22'].attrs['Description'] = 'The wavespace integral used in equation A13 of Gerbi et al. (2009)'
+    ds['J22'].attrs['Direction'] = 'Secondary' 
+    
+    ds['J33'] = (['burst'],J33_arr)
+    ds['J33'].attrs['Description'] = 'The wavespace integral used in equation A13 of Gerbi et al. (2009)'
+    ds['J33'].attrs['Direction'] = 'Vertical'
+    
+    return ds
 
 #===============================================================================================================================
 # Function for estimating k from wave period and total depth using dispersion relationships
@@ -1373,51 +1447,272 @@ def sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = 0,
     return Fp, Sw_prime
 
 #===============================================================================================================================
-def waveData(advData, Rho, fs, rSamp, nperseg, ZpOffset = 0, ZvOffset = 0):
-    advDS = advData.copy(deep=True)
-    bursts = advDS.BurstCounter.values
-    pTS = np.empty((len(bursts), int(nperseg/2)))
-    Pressure_detrend = xr.zeros_like(advDS.Pressure)
-    
-    print('Converting pressure spectra')
-    #Convert each burst of pressure spectra to vertical velocity using linear wave theory
-    for i in enumerate(bursts):
-        print('Evaluating burst '+str(i[0]+1)+' of '+str(len(bursts)))
-        Pressure = advDS.Pressure.where(advDS.BurstNum.isin(i[1]), drop = True)
-        Pressure_detrend[i[0]*len(Pressure):(i[0] + 1)*len(Pressure)] = signal.detrend(Pressure)
-        Fp, Sw_prime = vt.sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = False) 
-        pTS[i[0]] = Sw_prime[1:]
-    Tp = 1/Fp[1:] #First value is infinite, which is not compatible with matplotlib pcolormesh, so it's cut from the array
-    
-    #Convert detrended pressure to changes in meters of seawater
-    H = (Pressure_detrend * 1000)/(Rho*9.81)
-    Hmean = H.resample(time = rSamp).mean()
-    Hstd = H.resample(time = rSamp).std()
-    
-    print('Creating dataset')
-    #Create dataset
-    waveData = xr.Dataset(
+def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window='hann',
+                  pNoisefloorFreq=.4, vNoisefloorFreq=3.5, wtNoisefloorFactor=12,wtPeakwaveFactor=1.1, wtSlope = -4):
+                  
+    #Make a copy of the dataset to prevent accidental modification of original data
+    ADVds = ADVdata.copy(deep=True)
+    TEMPds = TEMPdata.copy(deep=True)
+
+    #Instrument data
+    fs = ADVds.attrs['Sampling rate'] #The sampling rate of the instrument (32 Hz in this case)
+    ZpOffset = ADVds.attrs['Pressure sensor height (m)'] #Height of ADV pressure sensor off the seafloor (m)
+    ZvOffset = ADVds.attrs['Velocity sample height (m)'] #Height of velocity measurement off the seafloor (m)
+    n = ADVds.attrs['Samples per burst'] #Number of data points within the burst (must be consistent for all bursts)
+    nperseg = segLength * fs #This corresponds to a 60 second window, which is 1920 data points
+
+    #The frequency at which the noise floor dominates the signal
+    #Estimated through observations made in the raw spectral data
+    pressureFn = pNoisefloorFreq #Frequency of pressure sensor noise floor cutoff in Hz
+    velocityFn = vNoisefloorFreq #Frequency of velocity transducer noise floor cutoff in Hz
+
+    #For modelling the pressure spectrum tail
+    fnFactor = wtNoisefloorFactor
+    fpFactor = wtPeakwaveFactor
+
+    if selBurstNumbers:
+        burstList = np.unique(selBurstNumbers)
+    else:
+        burstList = np.unique(ADVds.burst)
+
+    Su_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    Sv_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    Sw_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    Sp_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    SpModel_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    Sn_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    SwPrime_arr = np.empty((len(burstList),int(nperseg/2)+1))
+    Rho_arr = np.empty(len(burstList))
+    Z_arr = np.empty(len(burstList))
+    Fc_arr = np.empty(len(burstList))
+    wtCutoff_arr = np.empty(len(burstList))
+    pNoisefloor_arr = np.empty(len(burstList))
+    vNoisefloor_arr = np.empty(len(burstList))
+    Hrms_arr = np.empty(len(burstList))
+    Hs_arr = np.empty(len(burstList))
+    Tavg_arr = np.empty(len(burstList))
+    Tpeak_arr = np.empty(len(burstList))
+    waveOrbital_arr = np.empty(len(burstList))
+    CSPD_arr = np.empty(len(burstList))
+    CSPDstd_arr = np.empty(len(burstList))
+
+    J11 = ADVds.J11.where(ADVds.burst.isin(burstList), drop=True).values
+    J22 = ADVds.J22.where(ADVds.burst.isin(burstList), drop=True).values
+    J33 = ADVds.J33.where(ADVds.burst.isin(burstList), drop=True).values
+    PrimOrigRatio = ADVds.PrimOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
+    SecOrigRatio = ADVds.SecOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
+    UpOrigRatio = ADVds.UpOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
+    TimeStart = ADVds.time_start.where(ADVds.BurstCounter.isin(burstList), drop=True).values
+    BurstCounter = ADVds.BurstCounter.where(ADVds.time_start.isin(TimeStart), drop=True).values
+
+    for b in enumerate(burstList):
+        print('Burst #'+str(b[0])+' of '+str(len(burstList)))
+        burstU = ADVds.Primary.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
+        burstV = ADVds.Secondary.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
+        burstW = ADVds.Up.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
+        burstCSPD = ADVds.CSPD.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all')
+        CSPD_arr[b[0]] = burstCSPD.mean().values
+        CSPDstd_arr[b[0]] = burstCSPD.std().values
+        pressureRaw = ADVds.Pressure.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Raw adv head pressure in dbar
+        pressurePascal = pressureRaw * 10000 #Adv head pressure conbverted from dBar to Pascals
+
+        #Calculate PSD of both pressure time series, segment averaging the spectra via a specified segment length and filter window
+        #All time series of pressure are linearly detrended to account for tidal effects
+        FpRaw, SpRaw = welch(pressureRaw, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+        FpPa, SpPa = welch(pressurePascal, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+        Fw, Sw = welch(burstW, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+        Fu, Su = welch(burstU, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+        Fv, Sv = welch(burstV, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+
+        #Convert spectra to radian frequency, but keep unconverted
+        SpRawOmega = SpRaw / (2*np.pi)
+        Sp_arr[b[0]] = SpRawOmega
+
+        SpPaOmega = SpPa / (2*np.pi)
+
+        SwOmega = Sw / (2*np.pi)
+        Sw_arr[b[0]] = SwOmega
+
+        SuOmega = Su / (2*np.pi)
+        Su_arr[b[0]] = SuOmega
+
+        SvOmega = Sv / (2*np.pi)
+        Sv_arr[b[0]] = SvOmega
+
+        #wavedisp function uses period (from frequency) and water depth (h) to calculate omega, k, and phase speed of waves
+        #Convert frequency to radian frequency and wavenumber
+
+        Rho = TEMPdata.Rho.sel(time = slice(pressureRaw.time[0],pressureRaw.time[-1])).mean()
+        if Rho.isnull()==True:
+            try:
+                Rho = Rho_arr[b[0]-1]
+                Rho_arr[b[0]] = Rho
+            except:
+                Rho = 1025
+                Rho_arr[b[0]] = Rho
+        else:
+            Rho_arr[b[0]] = Rho.values
+        g = -9.8 # Gravity
+        z = (pressurePascal/(Rho*g)) - ZpOffset #Depth (m): the recorded pressure converted to meters of seawater
+        Z_arr[b[0]] = z.mean().values
+        H = np.mean(-z) #Sea level height (m): mean pressure detected by the pressure sensor plus the height of sensor from the bottom
+        Zp = np.mean(z + ZpOffset) #Depth of pressure sensor (m)
+        Zv = np.mean(z + ZvOffset) #Depth of velocity sensor (m): Sea level height plus the height of the velocity transducers from the bottom
+        T = 1/FpRaw #Period from previously calculate frequency
+
+        #Calculate radian frequency and wavenumber
+        omega,k,Cph,Cg = wavedisp(T, H)
+
+        #Using linear wave theory to find gravity wave vertical velocity spectrum and wave height spectrum
+        #Converting raw pressure spectrum to sea level spectrum (Jones and Monosmith, 2008)
+
+        #Find the cutoff frequency of the spectrum
+        fnIDX = np.where(FpRaw <=pressureFn)[0][-1] #The array indices where the noise floor begins in the spectrum
+        pNoisefloor = np.mean(SpRawOmega[fnIDX:]) #Average magnitude of noise floor
+        pNoisefloor_arr[b[0]] = pNoisefloor
+
+        fp = omega[np.where(SpRawOmega == np.nanmax(SpRawOmega[:fnIDX]))[0][0]] #The peak frequency of the raw pressure spectrum
+        fcIDX = np.where((omega[:fnIDX] > (fp * fpFactor)) & (SpRawOmega[:fnIDX] > (pNoisefloor*fnFactor)))[0][-1] #The array indices of the final cutoff frequency
+        Fc_arr[b[0]] = fcIDX
+
+        #Converting the spectrum
+        Kp = np.empty(len(k))
+        p_prime = np.empty(len(omega))
+        w_prime = np.empty(len(omega))
+        for i in enumerate(k):
+            Kp[i[0]] = (np.cosh(i[1]*(Zp+H))/np.cosh(i[1]*H))**2
+            p_prime[i[0]] = (Rho*(-g))*(np.cosh(i[1]*(Zp+H))/np.cosh(i[1]*H))
+            w_prime[i[0]] = (-omega[i[0]])*(np.sinh(i[1]*(Zv+H)))/(np.sinh(i[1]*H))
+
+        #Scale factor for converting pressure spectra (pascals) to vertical velocity spectra
+        scaleFactor = w_prime**2 / p_prime**2
+        SwPrime = SpPaOmega * scaleFactor
+
+        Sn = (SpRawOmega/Kp) #Use conversion equation to estimate sea level spectrum
+
+        #Calculate the omega^-4 model tail of spectrum
+        SnWavetail = (Sn[fcIDX]/(omega[fcIDX]**(wtSlope)))*(omega**(wtSlope))
+        SpWavetail = SnWavetail*Kp
+        SwPrimeWavetail = ((SnWavetail*Kp)*1e8) * scaleFactor
+
+        #Determine where the f-4 model should end by using the noise floor of the vertical velocity
+        velFnIDX = np.where(omega == (velocityFn*(2*np.pi)))[0][0]  #Position of the noise frequency in the omega array
+        vNoisefloor = np.mean(SwOmega[velFnIDX:]) #Noise floor of the vertical velocity spectrum
+        vNoisefloor_arr[b[0]] = vNoisefloor
+        
+        try:
+            wavetailCutoff = np.where((SwPrimeWavetail <= vNoisefloor)&(omega>fp))[0][1] #Where the tail should end
+        except:
+            wavetailCutoff = np.where(omega==np.pi)[0][0] #If wavetail runs into error, just use conservative
+                                                          #cutoff of pi rad/s (.5 Hz)
+        wtCutoff_arr[b[0]] = wavetailCutoff
+
+        #Make a seperate modelled spectrum with the wavetail
+        SpModel = np.empty(len(SpRawOmega))*np.nan
+        SpModel[:fcIDX+1] = SpRawOmega[:fcIDX+1]
+        SpModel[fcIDX:wavetailCutoff+1] = SpWavetail[fcIDX:wavetailCutoff+1]
+        SpModel_arr[b[0]] = SpModel
+
+        SnModel = np.empty(len(Sn))*np.nan
+        SnModel[:fcIDX+1] = Sn[:fcIDX+1]
+        SnModel[fcIDX:wavetailCutoff+1] = SnWavetail[fcIDX:wavetailCutoff+1]
+        Sn_arr[b[0]] = SnModel
+
+        SwPrimeModel = np.empty(len(SwPrime))*np.nan
+        SwPrimeModel[:fcIDX+1] = SwPrime[:fcIDX+1]
+        SwPrimeModel[fcIDX:wavetailCutoff+1] = SwPrimeWavetail[fcIDX:wavetailCutoff+1]
+        SwPrime_arr[b[0]] = SwPrimeModel
+
+        #Calculate wave height and period
+        m0 = np.trapz((omega[1:wavetailCutoff+1]**0)*SnModel[1:wavetailCutoff+1])
+        m2 = np.trapz((omega[1:wavetailCutoff+1]**2)*SnModel[1:wavetailCutoff+1])
+
+        Hrms_arr[b[0]] = 2*np.sqrt(2*m0)
+        Hs_arr[b[0]] = 4 * np.sqrt(m0)
+        Tavg_arr[b[0]] = (2*np.pi) * np.sqrt(m0/m2)
+        Tpeak_arr[b[0]] = 1/(omega[np.where(SnModel==np.nanmax(SnModel))[0][0]]/(2*np.pi))
+        waveOrbital_arr[b[0]] = oc.ubwave(Hs_arr[b[0]], Tavg_arr[b[0]], H)
+
+    # Create a new dataset with all relevant variables and epsilon values
+    print('Creating Dataset')
+    spectraDS = xr.Dataset(
         data_vars=dict(
-            waveSpectra=(["time", "period"], pTS.data),
-            Hmean=(["time"], Hmean.data),
-            Hstd=(["time"], Hstd.data),
+            Suu = (["time_start","omega"], Su_arr,
+                   {'Description':'Primary velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
+            Svv = (["time_start","omega"], Sv_arr,
+                  {'Description':'Secondary velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
+            Sww = (["time_start","omega"], Sw_arr,
+                  {'Description':'Vertical velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
+            Spp = (["time_start","omega"], Sp_arr,
+                  {'Description':'Pressure spectra from ADV head','Units':'[dBar]^2 * [rad/s]^-1'}),
+            SppModel = (["time_start","omega"], SpModel_arr,
+                       {'Description':'Pressure spectra with an f^-4 tail','Units':'[dBar]^2 * [rad/s]^-1'}),
+            Snn = (["time_start","omega"], Sn_arr,
+                  {'Description':'Sea level spectra estimated from pressure via linear wave theory with an f^-4 tail','Units':'[m]^2 * [rad/s]^-1'}),
+            SwwPrime = (["time_start","omega"], SwPrime_arr,
+                       {'Description':'Vertical velocity spectra estimated from pressure via linear wave theory with an f^-4 tail',
+                        'Units':'[m/s]^2 * [rad/s]^-1'}),
+            PressureNoisefloor = (["time_start"], pNoisefloor_arr,
+                                 {'Description':'Magnitude of noisefloor for pressure spectrum','Units':'[dBar]^2 * [rad/s]^-1'}),
+            VelocityNoisefloor = (["time_start"], vNoisefloor_arr,
+                                 {'Description':'Magnitude of noisefloor for vertical velocity spectrum','Units':'[m/s]^2 * [rad/s]^-1'}),
+            WavetailStart = (["time_start"], Fc_arr,
+                            {'Description':'Start of the f^-4 model','Units':'omega array index'}),
+            WavetailEnd = (["time_start"], wtCutoff_arr,
+                          {'Description':'End of the f^-4 model','Units':'omega array index'}),
+            Rho = (["time_start"], Rho_arr,
+                  {'Description':'Average density of water column','Units':'[Kg/m^3]'}),
+            Z = (["time_start"], Z_arr,
+                {'Description':'Depth of seafloor','Units':'m'}),
+            Hrms = (["time_start"], Hrms_arr,
+                   {'Description':'Root mean square wave height','Units':'m'}),
+            Hs = (["time_start"], Hs_arr,
+                 {'Description':'Significant wave height','Units':'m'}),
+            Tavg = (["time_start"], Tavg_arr,
+                   {'Description':'Average wave period','Units':'s'}),
+            Tpeak = (["time_start"], Tpeak_arr,
+                    {'Description':'Peak wave period','Units':'s'}),
+            WaveOrbitalVel = (["time_start"], waveOrbital_arr,
+                             {'Description':'Wave orbital velocity estimate','Units':'[m/s]'}),
+            WaveOrbitalAdvec = (["time_start"], waveOrbital_arr*Tavg_arr,
+                                {'Description':'Estimate advection distance of wave orbital','Units':'m'}),
+            CSPD = (["time_start"], CSPD_arr,
+                   {'Description':'Mean current speed','Units':'[m/s]'}),
+            CSPDstd = (["time_start"], CSPDstd_arr,
+                      {'Description':'Std. current speed','Units':'[m/s]'}),
+            J11 = (["time_start"], J11,
+                  {'Description':'Wavenumber integral of primary velocity from eq. A13 of Gerbi et. al (2009)'}),
+            J22 = (["time_start"], J22,
+                  {'Description':'Wavenumber integral of secondary velocity from eq. A13 of Gerbi et. al (2009)'}),
+            J33 = (["time_start"], J33,
+                  {'Description':'Wavenumber integral of vertical velocity from eq. A13 of Gerbi et. al (2009)'}),
+            PrimOrigRatio = (["time_start"], PrimOrigRatio,
+                            {'Description':'Ratio of bad data:total data for primary velocity'}),
+            SecOrigRatio = (["time_start"], SecOrigRatio,
+                           {'Description':'Ratio of bad data:total data for secondary velocity'}),
+            UpOrigRatio = (["time_start"], UpOrigRatio,
+                          {'Description':'Ratio of bad data:total data for vertical velocity'}),
+            BurstCounter = (["time_start"], BurstCounter)
         ),
         coords=dict(
-            time=(["time"],advDS.time_start.data),
-            period=(["period"], Tp.data),
+            time_start=(["time_start"], TimeStart),
+            omega=(["omega"], omega),
         ),
-        attrs=dict(description="Pressure spectra over both adv deployments"),
+        attrs=dict(Description="Velocity and pressure spectra with estimated wave variables")
     )
+    #Add Metadata to dataset and variables
+    spectraDS.attrs['Sampling rate (Hz)'] = ADVds.attrs['Sampling rate']
+    spectraDS.attrs['Samples per burst'] = ADVds.attrs['Samples per burst']
+    spectraDS.attrs['Pressure sensor height offset (m)'] = ADVds.attrs['Pressure sensor height (m)']
+    spectraDS.attrs['Velocity transducer height offset (m)'] = ADVds.attrs['Velocity sample height (m)']
+    spectraDS.attrs['Segment length (s)'] = segLength
+    spectraDS.attrs['Filter window'] = window
+    spectraDS.attrs['Pressure noise frequency (radian frequency)'] = pressureFn * (2*np.pi)
+    spectraDS.attrs['Velocity noise frequency (radian frequency)'] = velocityFn * (2*np.pi)
+    spectraDS.attrs['Noisefloor factor'] = fnFactor
+    spectraDS.attrs['Wavepeak factor'] = fpFactor
     
-    waveData.attrs['Rho'] = Rho.values
-    waveData.attrs['Sample Frequency'] = fs
-    waveData.attrs['Average Interval'] = rSamp
-    waveData.attrs['Segment Length'] = nperseg
-    waveData.attrs['Pressure Sensor Offset'] = ZpOffset
-    waveData.attrs['Velocity Beam Offset'] = ZvOffset
-    waveData.attrs['Velocity Beam Offset'] = ZvOffset
-    
-    return waveData
+    return spectraDS
 
 #===============================================================================================================================
 def power_law(x, a, b):
@@ -1426,6 +1721,348 @@ def power_law(x, a, b):
 #===============================================================================================================================
 def kol_law(x,a):
     return a*np.power(x,(-5/3))
+
+#================================================================================================================================
+def EpsCalc_from_SpectraDS(SPECdata, TEMPdata, minimumGap=1, noiseFrequency = None):
+
+    #Make a copy of the dataset to prevent accidental modification of original data
+    SPECds = SPECdata.copy(deep=True)
+    TEMPds = TEMPdata.copy(deep=True)
+
+    omega = SPECds.omega.values
+
+    #Calculate a minimum gap in terms of the frequency index
+    minGap = int((minimumGap*2*np.pi)/np.diff(omega)[0])
+    
+    Sw = SPECds.Sww.values
+    J33 = SPECds.J33.values
+
+    burstList = np.unique(SPECds.BurstCounter)
+
+    #Convert noise floor to radian frequency
+    if noiseFrequency:
+        fNoise = noiseFrequency
+        ufc = np.where(omega == fNoise)[0][0]
+        Noisefloor = np.empty(len(burstList))
+        for n in enumerate(Sw):
+            Noisefloor[n[0]] = np.mean(n[1][ufc:])
+    else:
+        fNoise = SPECds.attrs['Velocity noise frequency (radian frequency)']
+        ufc = np.where(omega == fNoise)[0][0] #Minimum frequency before the noise floor begins (upper ISR boundary
+        Noisefloor = SPECds.VelocityNoisefloor.values #Magnitude of noise floor
+
+    #Initialize arrays to hold all variables generated by the dataset
+    isrUpper = np.empty(len(burstList)) #Upper boundary of inertial subrange (ISR)
+    isrLower = np.empty(len(burstList)) #Lower boundary of ISR
+    Mu = np.empty(len(burstList)) #Slope of ISR fit
+    MuErr = np.empty(len(burstList)) #Error of slope
+    Int = np.empty(len(burstList)) #Intercept of ISR fit
+    IntErr = np.empty(len(burstList)) #Error of slope
+    KolInt = np.empty(len(burstList)) #Intercept of -5/3 fit
+    KolIntErr = np.empty(len(burstList)) #Error of -5/3 intercept
+    FitMisfit = np.empty(len(burstList)) #Misfit between ISR slope and -5/3
+    maxSw = np.empty(len(burstList)) 
+    minSw = np.empty(len(burstList))
+
+
+    #Initialize arrays to hold all dissipation estimates and eps variables
+    epsMag = np.empty(len(burstList)) #Mean of eps values over isr
+    epsErr = np.empty(len(burstList)) #Error in eps estimate
+    epsFitInt = np.empty(len(burstList)) # Intercept of eps estimate linear regression (LR) model
+    epsFitSlope = np.empty(len(burstList)) #LR Slope
+    epsFitR2val = np.empty(len(burstList)) #LR R2-value
+    epsFitPval = np.empty(len(burstList)) #LR P-value
+    epsFitSlopeErr = np.empty(len(burstList)) #Error of LR slope
+    epsFitIntErr = np.empty(len(burstList)) #Error of LR intercept
+
+    #Initialize array to hold Ozmidov and Komogorov length scale values once eps has been estimated
+    #LenOz = np.empty(len(burstList))
+    #LenKol = np.empty(len(burstList))
+
+    #Begin calculating epsilon for each of the specified bursts
+    for b in enumerate(burstList):
+        print('Evaluating burst '+str(b[0]+1)+' of '+str(len(burstList)))
+
+        #Identify burst number to be evaluated
+        burstNumber = b[1]
+        #Generate list of every possible boundary combination within lower and upper cutoff frequencies
+
+        lfc = int(SPECds.WavetailStart.values[b[0]]) #Where the gravity wave band ends
+
+        #Initialize an array of all frequencies within lfc and ufc
+        startRange = np.arange(lfc, ufc) 
+        bounds = [] #List of all ISR boundaries
+        if (ufc-lfc) > minGap:
+            #Create an array that is offset by the minimum gap
+            iteratorRange = np.arange(lfc+minGap, ufc) #First combination of points will be lfc : lfc + 1Hz gap
+
+            for i in range(ufc-(lfc+minGap)):
+                for j in range(len(iteratorRange)):
+                    #For each combination, record the boundaries into a list
+                    bounds.append((startRange[i], iteratorRange[j]))
+
+                #Each iteration shortens iterator range by 1 to prevent repeat and backwards combinations 
+                iteratorRange = iteratorRange[1:ufc] 
+
+        # If the range is shorter than the minimum gap, boundaries become the wave cutoff frequency and the noise floor
+        else:
+            bounds.append((lfc, ufc))
+
+        #Initialize arrays for curve fitting
+        testMinSw = np.empty(len(bounds))
+        testInt = np.empty(len(bounds))
+        testIntErr = np.empty(len(bounds))
+        testMu = np.empty(len(bounds))
+        testMuErr = np.empty(len(bounds))
+        muDiff = np.empty(len(bounds))
+        testEpsMag = np.empty(len(bounds))
+        testEpsErr = np.empty(len(bounds))
+        testEpsFitInt = np.empty(len(bounds))
+        testEpsFitSlope = np.empty(len(bounds))
+        testEpsFitR2val = np.empty(len(bounds))
+        testEpsFitPval = np.empty(len(bounds))
+        testEpsFitSlopeErr = np.empty(len(bounds))
+        testEpsFitIntErr = np.empty(len(bounds))
+        testKolInt = np.empty(len(bounds))
+        testKolIntErr = np.empty(len(bounds))
+        testFitMisfit = np.empty(len(bounds))
+
+        #Constants for estimating epsilon
+        alpha = 1.5 # Kolomogorov constant
+
+        #Go through the list of all combinations of ISR ranges and store the results
+        for i in np.arange(0,len(bounds)):
+            try:
+                #Generate power law fit using the next set of boundaries
+                pars, cov = curve_fit(f=power_law, xdata=omega[bounds[i][0]:bounds[i][1]],
+                                          ydata=Sw[b[0]][bounds[i][0]:bounds[i][1]], p0=[0, 0], bounds=(-np.inf, np.inf), maxfev=10000)
+                #Fit power curve with fixed -5/3 slope
+                pars2, cov2 = curve_fit(f=kol_law, xdata=omega[bounds[i][0]:bounds[i][1]],
+                                        ydata=Sw[b[0]][bounds[i][0]:bounds[i][1]], maxfev=10000)
+
+                muFit = pars[0] * (omega[bounds[i][0]:bounds[i][1]]**pars[1])
+                kolFit = pars2[0] * (omega[bounds[i][0]:bounds[i][1]]**(-5/3))
+
+                testMinSw[i] = Sw[b[0]][bounds[i][0]] #Spectra at lower boundary
+                testInt[i] = pars[0] #Fit intercept
+                testIntErr[i] = np.sqrt(np.diag(cov))[0] #intercept error to 90% confidence level
+                testMu[i] = pars[1] #Fit slope
+                testMuErr[i] = np.sqrt(np.diag(cov))[1] #Slope error to 90% confidence level
+
+                testKolInt[i] = pars2[0] #Intercept from -5/3 fit
+                testKolIntErr[i] = np.sqrt(np.diag(cov2))[0] #Intercept error from -5/3 fit to 90% confidence level
+
+                muDiff[i] = np.abs(pars[1]+(5/3)) #Misfit of the slope compared to -5/3
+                testFitMisfit[i] = np.square(np.subtract(muFit, kolFit)).mean()  #Mean square error between dynamic fit and -5/3 fit
+
+                #Estimate turbulent dissipation (Epsilon/eps)
+                isrOmega = omega[bounds[i][0]:bounds[i][1]] #Radian frequency range
+                S33 = Sw[b[0]][bounds[i][0]:bounds[i][1]] #Vertical velocity spectra within ISR
+
+                #Dissipation formula (Eq. A14 from Gerbi et al., 2009)
+                eps = ((S33 * (isrOmega**(5/3)))/(alpha * J33[b[0]]))**(3/2) #Returns array of eps estimates across ISR
+
+                #Fit a linear regression to eps estimates
+                res = stats.linregress(isrOmega, eps)
+
+                #Populate arrays
+                testEpsMag[i] = np.mean(eps) #Mean value of eps for the entire burst
+                testEpsErr[i] = np.sqrt(np.var(eps)/(len(eps)-1)) #Calculate error of the epsilon measurements from variance about the mean
+                                                                  #Method from Feddersen (2010)
+                testEpsFitInt[i] = res.intercept #Linear regression intercept
+                testEpsFitSlope[i] = res.slope #Linear regression slope
+                testEpsFitR2val[i] = res.rvalue**2 #R2 value of linear regression
+                testEpsFitPval[i] = res.pvalue #P-value of linear regression (used for qc)
+                testEpsFitSlopeErr[i] = res.stderr #Error of linear regression slope
+                testEpsFitIntErr[i] = res.intercept_stderr #Error of linear regression intercept
+
+            #If curve_fit can't fit properly, use 99999 as error values
+            except:
+                testMinSw[i] = 99999
+                testInt[i] = 99999
+                testIntErr[i] = 99999
+                testMu[i] = 99999
+                muDiff[i] = 99999
+                testMuErr[i] = 99999
+                testEpsMag[i] = 99999
+                testEpsErr[i] = 99999
+                testEpsFitInt[i] = 99999
+                testEpsFitSlope[i] = 99999
+                testEpsFitR2val[i] = 99999
+                testEpsFitPval[i] = 99999
+                testEpsFitSlopeErr[i] = 99999
+                testEpsFitIntErr[i] = 99999
+                testKolInt[i] = 99999
+                testKolIntErr[i] = 99999
+                testFitMisfit[i] = 99999
+
+        #Noise floor test from Gerbi et al. (2009)
+        noiseFlag = xr.where(testMinSw/2 > Noisefloor[b[0]], 0, 1)
+        noiseFlagSum = np.where(noiseFlag==0)[0]
+        if len(noiseFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
+            print('Failed noisefloor test')
+            continue
+            
+        #Curve fit intercept test from Jones and Monosmith (2008)
+        intFlag = xr.where(testEpsMag > testIntErr, 0, 1)
+        intFlagSum = np.where(intFlag==0)[0]
+        if len(intFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
+            print('Failed intercept test')
+            continue
+
+        #Spectra fit slope test from Feddersen (2010)
+        lowMu = testMu - (2*testMuErr) - .06
+        highMu = testMu + (2*testMuErr) + .06
+        slopeFlag = xr.where((lowMu < (-5/3)) & (highMu > (-5/3)), 0, 1)
+        slopeFlagSum = np.where(slopeFlag==0)[0]
+        if len(slopeFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
+            print('Failed Feddersen slope test')
+            continue
+            
+        #Spectra slope test from Wheeler and Giddings (2023)
+        normSlopeFlag = xr.where((muDiff/testMuErr) < 1.960, 0, 1)
+        normSlopeFlagSum = np.where(normSlopeFlag==0)[0]
+        if len(normSlopeFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
+            print('Failed W&G slope test')
+            continue
+            
+        #Epsilon linear regression test from Feddersen (2010)
+        linRegFlag = xr.where(testEpsFitPval > .01, 0, 1)
+
+        flagSum = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag + linRegFlag) == 0)[0] 
+
+        #Linear Regression slope test eliminates a lot of data which may have good eps estimate
+        #but a very tiny non-zero slope that is near negligible but with significant p-value
+        #If a data burst passes the test, it should be prioritized over other bursts, but too many
+        #bursts get rejected if the test is universally applied
+        #This if statement ensures that more bursts will pass, and the lin reg test can be applied
+        #in post-analysis and modified if need be
+        if len(flagSum) == 0:
+            finalFlag = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag) == 0)[0]
+        else:
+            finalFlag = flagSum
+
+        #If there are still no valid fits even without linReg test, burst fails and is nanned
+        if len(finalFlag) == 0:
+            minSw[b[0]] = np.nan
+            isrLower[b[0]] = np.nan
+            maxSw[b[0]] = np.nan 
+            isrUpper[b[0]] = np.nan
+            Int[b[0]] = np.nan 
+            IntErr[b[0]] = np.nan 
+            Mu[b[0]] = np.nan 
+            MuErr[b[0]] = np.nan 
+            KolInt[b[0]] = np.nan 
+            KolIntErr[b[0]] = np.nan 
+            FitMisfit[b[0]] = np.nan
+            epsMag[b[0]] = np.nan
+            epsErr[b[0]] = np.nan
+            epsFitInt[b[0]] = np.nan 
+            epsFitSlope[b[0]] = np.nan
+            epsFitR2val[b[0]] = np.nan
+            epsFitPval[b[0]] = np.nan
+            epsFitSlopeErr[b[0]] = np.nan
+            epsFitIntErr[b[0]] = np.nan
+            #LenOz[b[0]] = np.nan
+            #LenKol[b[0]] = np.nan
+            print('No valid fits')
+            continue
+
+        #If the burst passes, choose the fit with the lowest misfit from -5/3 fit
+        bestFit = finalFlag[testFitMisfit[finalFlag].argmin()]
+
+        minSw[b[0]] = Sw[b[0]][bounds[bestFit][0]]
+        isrLower[b[0]] = bounds[bestFit][0]
+        maxSw[b[0]] = Sw[b[0]][bounds[bestFit][1]] 
+        isrUpper[b[0]] = bounds[bestFit][1]
+
+        #All variables relevant from fitting power curves
+        Int[b[0]] = testInt[bestFit] 
+        IntErr[b[0]] = testIntErr[bestFit] 
+        Mu[b[0]] = testMu[bestFit] 
+        MuErr[b[0]] = testMuErr[bestFit] 
+        KolInt[b[0]] = testKolInt[bestFit] 
+        KolIntErr[b[0]] = testKolIntErr[bestFit] 
+        FitMisfit[b[0]] = testFitMisfit[bestFit]
+
+        #All variables pertaining to epsilon 
+        epsMag[b[0]] = testEpsMag[bestFit]
+        epsErr[b[0]] = testEpsErr[bestFit]
+        epsFitInt[b[0]] = testEpsFitInt[bestFit] 
+        epsFitSlope[b[0]] = testEpsFitSlope[bestFit]
+        epsFitR2val[b[0]] = testEpsFitR2val[bestFit]
+        epsFitPval[b[0]] = testEpsFitPval[bestFit] 
+        epsFitSlopeErr[b[0]] = testEpsFitSlopeErr[bestFit]
+        epsFitIntErr[b[0]] = testEpsFitIntErr[bestFit]
+
+        #Ozmidov length scale
+        #rho1 = tempData.Rho.sel(depth=4,time=slice(burstTime[0],burstTime[-1])).mean().values #Depths 4 and 6 correspond to 9.1 and 9.7m respectively
+        #rho2 = tempData.Rho.sel(depth=6,time=slice(burstTime[0],burstTime[-1])).mean().values
+        #dRho = np.abs(rho2 - rho1)/.6 #Change in density over depth
+        #rhoBar = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Mean density during the burst
+        #g = 9.81 #Gravity
+        #N = np.sqrt((g/rhoBar)*dRho) #Buoyancy frequency
+        #LenOz[b[0]] = np.sqrt(epsMag[b[0]]/N**3)
+
+        #Calculate the Kolmogorov length scale                       
+        #nuTemp = burstTemp.mean().values+273.15
+        #nuPress = burstPressure.mean().values/100 + 0.101325
+        #nu = iapws95.IAPWS95_PT(nuPress,nuTemp).nu
+        #LenKol[b[0]] = ((nu**3)/epsMag[b[0]])**.25
+
+    epsDS = SPECds.copy(deep=True)
+
+    #Add Metadata to dataset and variables
+    epsDS.attrs['Minimum ISR gap (radian frequency)'] = minGap*np.diff(omega)[0]
+
+    epsDS['MaxISRMag'] = (["time_start"], maxSw,{'Description':'Vertical velocity spectra at the maximum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
+    epsDS['MinISRMag'] = (["time_start"], minSw,{'Description':'Vertical velocity spectra at the minimum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
+
+    epsDS['lowBound'] = (["time_start"], isrLower,{'Description':'Index number of the lower ISR boundary in omega array'})
+    epsDS['highBound'] = (["time_start"], isrUpper,{'Description':'Index number of the upper ISR boundary in omega array'})
+    epsDS['Int'] = (["time_start"], Int,{'Description':'Intercept of ISR power curve fit','Units':'[m/s]^2 * [rad/s]^-1'})
+    epsDS['IntErr'] = (["time_start"], IntErr,{'Description':'Error of the power curve intercept'})
+    epsDS['Mu'] = (["time_start"], Mu,{'Description':'Slope of ISR power curve fit'})
+    epsDS['MuErr'] = (["time_start"], MuErr,{'Description':'Error of the power curve slope'})
+    epsDS['KolFitInt'] = (["time_start"], KolInt,{'Description':'Intercept of Kolmogorov law','Units':'[m/s]^2 * [rad/s]^-1'})
+    epsDS['KolFitIntErr'] = (["time_start"], KolIntErr,{'Description':'Error of Kolmogorov law intercept'})
+    epsDS['ISRMisfit'] = (["time_start"], FitMisfit,{'Description':'Mean square error between ISR power curve and Kolmogorov law'})
+
+    epsDS['eps'] = (["time_start"], epsMag,{'Description':'Turbulent kinetic energy dissipation rate','Units':'[m^2/s^3]'})
+    epsDS['epsErr'] = (["time_start"], epsErr,{'Description':'Error in epsilon estimate','Units':'[m^2/s^3]'}) 
+    epsDS['epsLRInt'] = (["time_start"], epsFitInt,{'Description':'Intercept of epsilon linear regression'})
+    epsDS['epsLRIntErr'] = (["time_start"], epsFitIntErr,{'Description':'Intercept error of epsilon linear regression'})
+    epsDS['epsLRSlope'] = (["time_start"], epsFitSlope,{'Description':'Slope of epsilon linear regression'})
+    epsDS['epsLRSlopeErr'] = (["time_start"], epsFitSlopeErr,{'Description':'Slope error of epsilon linear regression'})
+    epsDS['epsLRR2val'] = (["time_start"], epsFitR2val,{'Description':'R-squared value of epsilon linear regression'})
+    epsDS['epsLRPval'] = (["time_start"], epsFitPval,{'Description':'P-value of epsilon linear regression'})
+
+    #L_Ozmidov = (["time_start"], LenOz,{'Description':'Slope of ISR power curve fit'})
+    #L_Kolmogorov = (["time_start"], LenKol,{'Description':'Slope of ISR power curve fit'})
+    #epsDS['L_Ozmidov'].attrs['Description'] = 'Ozmidov length scale'
+    #epsDS['L_Kolmogorov'].attrs['Description'] = 'Kolmogorov length scale'
+
+    return epsDS
 
 #================================================================================================================================
 def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=None, minimumGap=1, noiseFrequency = 3.1, ZpOffset = 0, ZvOffset = 0):
@@ -1448,11 +2085,11 @@ def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=N
 
     #Convert frequency to radian frequency and wavenumber
     T = 1/Ftest
-    H = np.mean(ds.Depth)
+    H = np.mean(ds.Pressure+ZpOffset)
     omega,k,Cph,Cg = wavedisp(T, H)
 
     J33 = ds.J33.where(ds.burst.isin(burstList), drop=True).values # Wavenumber space integral
-    dUp = ds.dUp.where(ds.burst.isin(burstList), drop=True).values # Ratio of bad datapoints within the burst
+    dUp = ds.UpOrigRatio.where(ds.burst.isin(burstList), drop=True).values # Ratio of bad datapoints within the burst
 
     #Calculate a minimum gap in terms of the frequency index returned by scipy.welch
     minGap = int((minimumGap*2*np.pi)/np.diff(omega)[0])
@@ -1737,8 +2374,8 @@ def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=N
         epsFitIntErr[b[0]] = testEpsFitIntErr[bestFit]
 
         #Ozmidov length scale
-        rho1 = tempData.Rho.sel(depth=4,time=slice(burstTime[0],burstTime[-1])).mean().values #Depths 4 and 6 correspond to 9.1 and 9.7m respectively
-        rho2 = tempData.Rho.sel(depth=6,time=slice(burstTime[0],burstTime[-1])).mean().values
+        rho1 = tempData.Rho.sel(bindist=1,time=slice(burstTime[0],burstTime[-1])).mean().values
+        rho2 = tempData.Rho.sel(bindist=1.5,time=slice(burstTime[0],burstTime[-1])).mean().values
         dRho = np.abs(rho2 - rho1)/.6 #Change in density over depth
         rhoBar = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Mean density during the burst
         g = 9.81 #Gravity
