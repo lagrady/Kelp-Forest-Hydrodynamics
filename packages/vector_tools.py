@@ -1237,9 +1237,9 @@ def InterpAvg_ADV(ADVdata, interpTimeDelta = 1, reversePrincVel = False):
     delta = timedelta(seconds=interpTimeDelta + (2/fs)) #Maximum gap of 1 second (2/fs ensures that points right at the margin are taken into account)
 
     #Linearly interpolate across gaps up to a limit denoted by time delta
-    ds['East'] = ds.East.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
-    ds['North'] = ds.North.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
-    ds['Up'] = ds.Up.interpolate_na(dim="time", method="cubic", use_coordinate=True, max_gap = delta)
+    ds['East'] = ds.East.interpolate_na(dim="time", method="linear", use_coordinate=True, max_gap = delta)
+    ds['North'] = ds.North.interpolate_na(dim="time", method="linear", use_coordinate=True, max_gap = delta)
+    ds['Up'] = ds.Up.interpolate_na(dim="time", method="linear", use_coordinate=True, max_gap = delta)
 
     print('Averaging gaps > 1s')
     #Average the rest of the longer gaps
@@ -1774,6 +1774,7 @@ def EpsCalc_from_SpectraDS(SPECdata, TEMPdata, minimumGap=1, noiseFrequency = No
     epsFitPval = np.empty(len(burstList)) #LR P-value
     epsFitSlopeErr = np.empty(len(burstList)) #Error of LR slope
     epsFitIntErr = np.empty(len(burstList)) #Error of LR intercept
+    R_ratio = np.empty(len(burstList))
 
     #Initialize array to hold Ozmidov and Komogorov length scale values once eps has been estimated
     #LenOz = np.empty(len(burstList))
@@ -2038,8 +2039,10 @@ def EpsCalc_from_SpectraDS(SPECdata, TEMPdata, minimumGap=1, noiseFrequency = No
     epsDS['MaxISRMag'] = (["time_start"], maxSw,{'Description':'Vertical velocity spectra at the maximum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
     epsDS['MinISRMag'] = (["time_start"], minSw,{'Description':'Vertical velocity spectra at the minimum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
 
-    epsDS['lowBound'] = (["time_start"], isrLower,{'Description':'Index number of the lower ISR boundary in omega array'})
-    epsDS['highBound'] = (["time_start"], isrUpper,{'Description':'Index number of the upper ISR boundary in omega array'})
+    epsDS['lowBound'] = (["time_start"], isrLower,{'Description':'Index number of the lower ISR boundary in omega array',
+                                                  'Units':'omega array index'})
+    epsDS['highBound'] = (["time_start"], isrUpper,{'Description':'Index number of the upper ISR boundary in omega array',
+                                                   'Units':'omega array index'})
     epsDS['Int'] = (["time_start"], Int,{'Description':'Intercept of ISR power curve fit','Units':'[m/s]^2 * [rad/s]^-1'})
     epsDS['IntErr'] = (["time_start"], IntErr,{'Description':'Error of the power curve intercept'})
     epsDS['Mu'] = (["time_start"], Mu,{'Description':'Slope of ISR power curve fit'})
@@ -2056,6 +2059,31 @@ def EpsCalc_from_SpectraDS(SPECdata, TEMPdata, minimumGap=1, noiseFrequency = No
     epsDS['epsLRSlopeErr'] = (["time_start"], epsFitSlopeErr,{'Description':'Slope error of epsilon linear regression'})
     epsDS['epsLRR2val'] = (["time_start"], epsFitR2val,{'Description':'R-squared value of epsilon linear regression'})
     epsDS['epsLRPval'] = (["time_start"], epsFitPval,{'Description':'P-value of epsilon linear regression'})
+    
+    #Calculate the R-ratio for unity between horizontal and vertical spectra
+    Suv = (epsDS.Suu+epsDS.Svv)/2
+    a = 12/55
+    for b in enumerate(burstList):
+        SuvNF = Suv[b[0]][ufc:].mean() #210 is the index value of 3.5Hz noise frequency
+        SuvUB = np.where(Suv[b[0]]<=SuvNF)[0][0]
+        #If the noise floor frequency in Suv is higher than the highest ISR frequency
+        #continue with R-ratio calculation as normal
+        if SuvUB >= epsDS.highBound.values[b[0]]:
+            omegaR = epsDS.omega[int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
+            SuvR = Suv[b[0]][int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
+            SwwR = epsDS.Sww[b[0]][int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
+            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
+        elif ((SuvUB<epsDS.highBound.values[b[0]]))&(SuvUB>=epsDS.lowBound.values[b[0]]):
+            omegaR = epsDS.omega[int(epsDS.lowBound.values[b[0]]):SuvUB]**(5/3)
+            SuvR = Suv[b[0]][int(epsDS.lowBound.values[b[0]]):SuvUB]
+            SwwR = epsDS.Sww[b[0]][int(epsDS.lowBound.values[b[0]]):SuvUB]
+            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
+        elif (SuvUB<epsDS.lowBound.values[b[0]]):
+            R_ratio[b[0]] = np.nan
+        else:
+            R_ratio[b[0]] = np.nan
+    epsDS['R_ratio'] = (['time_start'],R_ratio,{'Description':'The unity between the horizontal and vertical spectra'})
+
 
     #L_Ozmidov = (["time_start"], LenOz,{'Description':'Slope of ISR power curve fit'})
     #L_Kolmogorov = (["time_start"], LenKol,{'Description':'Slope of ISR power curve fit'})
