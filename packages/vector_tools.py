@@ -1283,30 +1283,47 @@ def InterpAvg_ADV(ADVdata, interpTimeDelta = 1, reversePrincVel = False):
 #=============================================== DISSIPATION ESTIMATION FUNCTIONS ==============================================
 #===============================================================================================================================
 
-def JlmIntegral(ADVdata):
+def JlmIntegral(ADVdata, n):
+    
+    #Make copy of dataset
     ds = ADVdata.copy(deep=True)
+    
+    #Retrieve list of burst numbers of dataset
     burst_list = np.unique(ds.BurstNum.values)
+    
+    #Initialize Jlm arrays for each dimension and burst
     J11_arr = np.empty(len(burst_list))
     J22_arr = np.empty(len(burst_list))
     J33_arr = np.empty(len(burst_list))
+
+    #Initialize all variables theta, phi, and R within boundaries a to b
+    #as specified by the Gerbi et al., 2009 equation
+    phi = np.linspace(0, 2*np.pi, n)
+    theta = np.linspace(0, np.pi, n)
     
-    # Initialize all variables theta, phi, and R within boundaries a to b
-    phi = np.linspace(0, 2*np.pi, 1000)
-    theta = np.linspace(0, np.pi, 1000)
-    thetaRS = np.linspace(0, np.pi, 1000).reshape(1000,1)
+    #Reshap theta array to form a 'vertical' array
+    thetaRS = np.linspace(0, np.pi, n).reshape(n,1)
     
-    fTheta_11 = np.empty(len(theta)) # dims (burst, fPhi)
+    #Initialize empty arrays to hold the final integral with theta
+    fTheta_11 = np.empty(len(theta))
     fTheta_22 = np.empty(len(theta))
     fTheta_33 = np.empty(len(theta))
-        
-    for b in enumerate(burst_list):
-        
-        print('Burst #: '+str(b[1]))
-        
-        U = ds.Primary.where(ds.BurstNum.isin(b[1]), drop = True).values
-        V = ds.Secondary.where(ds.BurstNum.isin(b[1]), drop = True).values
-        W = ds.Up.where(ds.BurstNum.isin(b[1]), drop = True).values
     
+    #Cycle through each burst in the dataset
+    for b in enumerate(burst_list):
+
+        print('Burst #: '+str(b[1]))
+    
+        #Call East, North, Vertical velocities from dataset
+        E = ds.East.where(ds.BurstNum.isin(b[1]), drop = True).values
+        N = ds.North.where(ds.BurstNum.isin(b[1]), drop = True).values
+        W = ds.Up.where(ds.BurstNum.isin(b[1]), drop = True).values
+        
+        #Rotate the individual burst along principle axis
+        #Ensures that the assumptions of the equation are being followed
+        theta_rot, major, minor = ts.princax(E, N) # theta = angle, major = SD major axis (U), SD minor axis (V)
+        V, U = ts.rot(E, N, -theta_rot-90)
+
         #Magnitude of current
         ubar = np.nanmean(np.sqrt(U**2))
         vbar = np.nanmean(np.sqrt(V**2))
@@ -1316,39 +1333,45 @@ def JlmIntegral(ADVdata):
         usig = np.nanstd(U)
         vsig = np.nanstd(V) 
         wsig = np.nanstd(W) 
-    
+
         #Variance
         uvar = usig**2
         vvar = vsig**2
         wvar = wsig**2
 
-        # Find J_lm using method from Gerbi et al. (2009)
-    
+        #Create 2D arrays of R0, G, and Plm over all values of phi and theta
         R0 = ((ubar/usig) * (np.sin(thetaRS)*np.cos(phi))) + ((vbar/vsig) * (np.sin(thetaRS)*np.sin(phi)))
-    
+
         G = np.sqrt((np.sin(thetaRS)**2) * (((np.cos(phi)/usig)**2) + ((np.sin(phi)/vsig)**2)) + ((np.cos(thetaRS)/wsig)**2))
-    
+
         P_11 = (1/(G**2))*((((np.sin(thetaRS)**2)*(np.sin(phi)**2))/vvar)+((np.cos(thetaRS)**2)/wvar))
         P_22 = (1/(G**2))*((((np.sin(thetaRS)**2)*(np.cos(phi)**2))/uvar)+((np.cos(thetaRS)**2)/wvar))
         P_33 = ((np.sin(thetaRS)/G)**2) * (((np.cos(phi)/usig)**2) + ((np.sin(phi)/vsig)**2))
-    
-        fR = quad_vec(lambda R: (R**(2/3))*np.exp(-(((R0-R)**2)/2)), 0, 7)[0]
-    
+        
+        #Use scipy.quad_vec to integrate R over two dimensions for all values of phi and theta
+        #R itself is integrated from 0 - 10, which is where the curve becomes asymptotic
+        fR = quad_vec(lambda R: (R**(2/3))*np.exp(-(((R0-R)**2)/2)), 0, 10)[0]
+        #Creates 2D array of R (a function of theta and phi) where each column is
+        #a value of phi and each row pertains to a value of theta
+        
+        #Caculate second integral of the function (phi)
         fPhi_11 = (G**(-11/3))*np.sin(thetaRS)*P_11 * fR
         fPhi_22 = (G**(-11/3))*np.sin(thetaRS)*P_22 * fR
         fPhi_33 = (G**(-11/3))*np.sin(thetaRS)*P_33 * fR
-    
-        for i in enumerate(theta): # Iterates through theta values (the rows of the empty 2d arrays)
+        
+        #Integrate the array through all values of theta
+        for i in enumerate(theta): 
 
             fTheta_11[i[0]] = np.trapz(fPhi_11[i[0]], phi)
             fTheta_22[i[0]] = np.trapz(fPhi_22[i[0]], phi)
             fTheta_33[i[0]] = np.trapz(fPhi_33[i[0]], phi)
-             
+
         # Evaluate the final integral of fTheta and use it to find J_lm    
         J_11 = (1/(2*((2*np.pi)**(3/2))))*(1/(usig*vsig*wsig)) * np.trapz(fTheta_11, theta)
         J_22 = (1/(2*((2*np.pi)**(3/2))))*(1/(usig*vsig*wsig)) * np.trapz(fTheta_22, theta)
         J_33 = (1/(2*((2*np.pi)**(3/2))))*(1/(usig*vsig*wsig)) * np.trapz(fTheta_33, theta)
         
+        #Add values to arrays
         J11_arr[b[0]] = J_11
         J22_arr[b[0]] = J_22
         J33_arr[b[0]] = J_33
@@ -1447,102 +1470,184 @@ def sppConversion(Pressure, Rho, fs, nperseg, dBarToPascal = True, ZpOffset = 0,
     return Fp, Sw_prime
 
 #===============================================================================================================================
-def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window='hann',
-                  pNoisefloorFreq=.4, vNoisefloorFreq=3.5, wtNoisefloorFactor=12,wtPeakwaveFactor=1.1, wtSlope = -4):
-                  
-    #Make a copy of the dataset to prevent accidental modification of original data
+def power_law(x, a, b):
+    return a*np.power(x, b)
+
+#===============================================================================================================================
+def kol_law(x,a):
+    return a*np.power(x,(-5/3))
+
+#================================================================================================================================
+def ADV_spectraDS(ADVdata, TEMPdata, segLength=60, window='hann', pNoisefloorFreq=.4, vNoisefloorFreq=3.1,
+                  wtNoisefloorFactor=12,wtPeakwaveFactor=1.1, wtSlope = -4, minimumGap = 1):
+    '''
+    A function that takes the fully quality controlled and repaired ADV xarray dataset and an associated density time series, and uses
+    both to form a comprehensive dataset of wave parameters and turbulent dissipation estimates.
+    
+    Methods for calculating wave parameters and estimating turbulent dissipation from ADV velocity and pressure spectra are
+    used from Feddersen (2010), Gerbi et al. (2009), Jones and Monosmith (2007, 2008), Trowbrige and Elgar (2001), Wheeler and Giddings (2023)
+    
+    INPUTS:
+    ADVdata: Fully despiked, filtered, and repaired ADV dataset generated by ADV_dat.ipynb
+    TEMPdata: A time series of density that spans the length of the ADV dataset (must have 'time' dimension)
+    segLength: The duration (in seconds) of data used in each segment of the FFT computed 
+                by scipy.welch (this is multiplied by sample frequency)
+    window: The desired filter window for the spectra (defaults to hann)
+    pNoisefloorFreq: The frequency where the pressure spectra noise floor begins in Hz (defaults to .4)
+    vNoisefloorFreq: The frequency where the vertical velocity noise floor begins in Hz (defaults to 3.1)
+    wtNoisefloorFactor: This factor controls how much higher the wave band cutoff frequency must be from 
+                        the pressure noise floor magnitude (defaults to 12 as specified in Jones and Monosmith (2007))
+    wtPeakwaveFactor: This factor controls how much lower the wave band cutoff frequency must be from
+                        the peak wave frequency (defaults to 1.1 as specified in Jones and Monosmith (2007))
+    wtSlope: The slope of the model wavetail after the surface wave cutoff frequency (defaults to -4)
+    minimumGap: The minimum range of the ISR that the function uses to estimate turbulent dissipation9
+    
+    
+    OUTPUTS:
+    xarray dataset with wave, inertial subrange, and turbulent dissipation parameters
+    '''
+    
+    print('Initializing dataset information and arrays')
+    #Make a copy of the datasets to prevent accidental modification of original data
     ADVds = ADVdata.copy(deep=True)
     TEMPds = TEMPdata.copy(deep=True)
 
     #Instrument data
-    fs = ADVds.attrs['Sampling rate'] #The sampling rate of the instrument (32 Hz in this case)
+    fs = ADVds.attrs['Sampling rate']                    #The sampling rate of the instrument (32 Hz in this case)
     ZpOffset = ADVds.attrs['Pressure sensor height (m)'] #Height of ADV pressure sensor off the seafloor (m)
     ZvOffset = ADVds.attrs['Velocity sample height (m)'] #Height of velocity measurement off the seafloor (m)
-    n = ADVds.attrs['Samples per burst'] #Number of data points within the burst (must be consistent for all bursts)
-    nperseg = segLength * fs #This corresponds to a 60 second window, which is 1920 data points
+    n = ADVds.attrs['Samples per burst']                 #Number of data points within the burst (must be consistent for all bursts)
+    nperseg = segLength * fs                             #The segment length of the FFT ensemble average
 
     #The frequency at which the noise floor dominates the signal
     #Estimated through observations made in the raw spectral data
     pressureFn = pNoisefloorFreq #Frequency of pressure sensor noise floor cutoff in Hz
     velocityFn = vNoisefloorFreq #Frequency of velocity transducer noise floor cutoff in Hz
 
-    #For modelling the pressure spectrum tail
+    #Wave band cutoff frequency factors used in Jones and Monosmith (2007)
     fnFactor = wtNoisefloorFactor
     fpFactor = wtPeakwaveFactor
+    
+    #List of burst numbers to categorize adv samples
+    burstList = np.unique(ADVds.burst)
+    
+    #Initialize arrays to hold all variables generated by the function
+    SpModel_arr = np.empty((len(burstList),int(nperseg/2)+1))  #Raw pressure spectra with omega^-4 tail
+    Sn_arr = np.empty((len(burstList),int(nperseg/2)+1))       #Sea level spectra
+    SwPrime_arr = np.empty((len(burstList),int(nperseg/2)+1))  #Vertical velocity from pressure spectra
+    Rho_arr = np.empty(len(burstList))                         #Mean density for each burst
+    Z_arr = np.empty(len(burstList))                           #Seafloor depth for each burst
+    Fc_arr = np.empty(len(burstList))                          #Position of gravity wave cutoff in the frequency array
+    wtCutoff_arr = np.empty(len(burstList))                    #Position of omega^-4 wavetail cutoff in frequency array
+    pNoisefloor_arr = np.empty(len(burstList))                 #Magnitude of pressure noisefloor
+    vNoisefloor_arr = np.empty(len(burstList))                 #Magnitude of vertical velocity noisefloor
+    Hrms_arr = np.empty(len(burstList))                        #Root mean square wave height
+    Hs_arr = np.empty(len(burstList))                          #Significant wave height
+    Tavg_arr = np.empty(len(burstList))                        #Average wave period
+    Tpeak_arr = np.empty(len(burstList))                       #Peak wave period
+    waveOrbital_arr = np.empty(len(burstList))                 #Estimated wave orbital velocity
+    CSPD_arr = np.empty(len(burstList))                        #Mean current velocity for each burst
+    CSPDstd_arr = np.empty(len(burstList))                     #Standard deviation of current velocity per burst
 
-    if selBurstNumbers:
-        burstList = np.unique(selBurstNumbers)
-    else:
-        burstList = np.unique(ADVds.burst)
+    #Initialize arrays for variables inertial subrange (ISR)
+    isrUpper = np.empty(len(burstList))  #Upper boundary of ISR based on the best fit
+    isrLower = np.empty(len(burstList))  #Lower boundary of ISR based on the best fit
+    Mu = np.empty(len(burstList))        #Slope of ISR fit
+    MuErr = np.empty(len(burstList))     #Error of slope
+    Int = np.empty(len(burstList))       #Intercept of ISR fit
+    IntErr = np.empty(len(burstList))    #Error of slope
+    KolInt = np.empty(len(burstList))    #Intercept of -5/3 fit
+    KolIntErr = np.empty(len(burstList)) #Error of -5/3 intercept
+    FitMisfit = np.empty(len(burstList)) #Misfit between ISR slope and -5/3
+    maxSw = np.empty(len(burstList))     #The highest magnitude of vertical velocity spectra in the ISR
+    minSw = np.empty(len(burstList))     #Lowest magnitude in the ISR
 
-    Su_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    Sv_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    Sw_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    Sp_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    SpModel_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    Sn_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    SwPrime_arr = np.empty((len(burstList),int(nperseg/2)+1))
-    Rho_arr = np.empty(len(burstList))
-    Z_arr = np.empty(len(burstList))
-    Fc_arr = np.empty(len(burstList))
-    wtCutoff_arr = np.empty(len(burstList))
-    pNoisefloor_arr = np.empty(len(burstList))
-    vNoisefloor_arr = np.empty(len(burstList))
-    Hrms_arr = np.empty(len(burstList))
-    Hs_arr = np.empty(len(burstList))
-    Tavg_arr = np.empty(len(burstList))
-    Tpeak_arr = np.empty(len(burstList))
-    waveOrbital_arr = np.empty(len(burstList))
-    CSPD_arr = np.empty(len(burstList))
-    CSPDstd_arr = np.empty(len(burstList))
-
+    #Initialize arrays to hold all dissipation estimates and eps variables
+    epsMag = np.empty(len(burstList))         #Mean of eps values over isr
+    epsErr = np.empty(len(burstList))         #Error in eps estimate
+    epsFitInt = np.empty(len(burstList))      #Intercept of eps estimate linear regression (LR) model
+    epsFitSlope = np.empty(len(burstList))    #LR Slope
+    epsFitR2val = np.empty(len(burstList))    #LR R2-value
+    epsFitPval = np.empty(len(burstList))     #LR P-value
+    epsFitSlopeErr = np.empty(len(burstList)) #Error of LR slope
+    epsFitIntErr = np.empty(len(burstList))   #Error of LR intercept
+    validFits = np.empty(len(burstList))      #Number of ISR fits that pass qc tests
+    validLB = np.empty(len(burstList))        #The lowest valid frequency of the ISR
+    validUB = np.empty(len(burstList))        #The highest valid frequency of the ISR
+    epsKDE = np.empty(len(burstList))         #Eps estimate from Gaussian KDE fit
+    R_ratio = np.empty(len(burstList))
+    
+    #Constants for estimating epsilon
+    alpha = 1.5 # Kolomogorov constant
+    
+    #Jlm wavenumber integrals from Gerbi et al. (2009)
     J11 = ADVds.J11.where(ADVds.burst.isin(burstList), drop=True).values
     J22 = ADVds.J22.where(ADVds.burst.isin(burstList), drop=True).values
     J33 = ADVds.J33.where(ADVds.burst.isin(burstList), drop=True).values
-    PrimOrigRatio = ADVds.PrimOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
-    SecOrigRatio = ADVds.SecOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
-    UpOrigRatio = ADVds.UpOrigRatio.where(ADVds.burst.isin(burstList), drop=True).values
+    
+    #Ratios of unoriginal data to total samples for future quality control
+    PrimOrigRatio = ADVds.PrimOrigRatio.where(ADVds.BurstCounter.isin(burstList), drop=True).values
+    SecOrigRatio = ADVds.SecOrigRatio.where(ADVds.BurstCounter.isin(burstList), drop=True).values
+    UpOrigRatio = ADVds.UpOrigRatio.where(ADVds.BurstCounter.isin(burstList), drop=True).values
+    
+    #List of start times to be used as a dimension in the final dataset
     TimeStart = ADVds.time_start.where(ADVds.BurstCounter.isin(burstList), drop=True).values
+    burstTime = ADVds.time.values.reshape(len(burstList),n) #Array of all segmented times
+    
+    #A list of burst number indexed by start time
     BurstCounter = ADVds.BurstCounter.where(ADVds.time_start.isin(TimeStart), drop=True).values
 
+    #All velocity and pressure components are converted to 2D arrays for easy retrieval by the function
+    #Dimensions (# of bursts, total samples)
+    burstCSPD = ADVds.CSPD.values.reshape(len(burstList),n)     #Array of current speed
+    burstU = ADVds.Primary.values.reshape(len(burstList),n)     #Horizontal velocities
+    burstV = ADVds.Secondary.values.reshape(len(burstList),n) 
+    burstW = ADVds.Up.values.reshape(len(burstList),n)          #Vertical velocity
+    burstCSPD = ADVds.CSPD.values.reshape(len(burstList),n)     #Current speed
+    burstPRaw = ADVds.Pressure.values.reshape(len(burstList),n) #Raw adv head pressure in dbar
+    burstPPascal = burstPRaw * 10000                            #Adv head pressure conbverted from dBar to Pascals
+
+    #Calculate PSD of both pressure time series, segment averaging the spectra via a specified segment length and filter window
+    #All time series of pressure are linearly detrended to account for tidal effects
+    FpRaw, SpRaw = welch(burstPRaw, fs = fs, nperseg = nperseg, window=window, detrend = 'linear') #Raw pressure spectra
+    FpPa, SpPa = welch(burstPPascal, fs = fs, nperseg = nperseg, window=window, detrend = 'linear') #Raw pressure spectra (pascals)
+    Fw, Sw = welch(burstW, fs = fs, nperseg = nperseg, window=window, detrend = 'linear') #Vertical velocity spectra
+    Fu, Su = welch(burstU, fs = fs, nperseg = nperseg, window=window, detrend = 'linear') #Horizontal velocity spectra
+    Fv, Sv = welch(burstV, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+
+    #Convert to spectra to radian frequency
+    SpRawOmega = SpRaw / (2*np.pi)
+    SpPaOmega = SpPa / (2*np.pi)
+    SwOmega = Sw / (2*np.pi)
+    SuOmega = Su / (2*np.pi)
+    SvOmega = Sv / (2*np.pi)
+    
+    #Create seperate array of period spectrum from the frequency arrays generated by scipy.welch
+    T = 1/FpRaw 
+
+    #Define the minimum gap of the ISR in terms of the frequency array
+    #I.E. a 'minGap' of 60 means that every 60 positions in the frequency array
+    #pertains to 1Hz, if 1Hz is the desired minimum gap specific in the function parameters
+    minGap = int((minimumGap*2*np.pi)/np.diff(Fw*(2*np.pi))[0])
+    
+    print('Calculating spectra and estimating dissipation for...')
+    #Begin the wave parameter and dissipation estimation loop
     for b in enumerate(burstList):
-        print('Burst #'+str(b[0])+' of '+str(len(burstList)))
-        burstU = ADVds.Primary.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
-        burstV = ADVds.Secondary.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
-        burstW = ADVds.Up.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Vertical velocity
-        burstCSPD = ADVds.CSPD.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all')
-        CSPD_arr[b[0]] = burstCSPD.mean().values
-        CSPDstd_arr[b[0]] = burstCSPD.std().values
-        pressureRaw = ADVds.Pressure.where(ADVds.BurstNum.isin(b[1])).dropna(dim='time',how='all') #Raw adv head pressure in dbar
-        pressurePascal = pressureRaw * 10000 #Adv head pressure conbverted from dBar to Pascals
+        
+        #Each time b[0] is used, that determines the burst being evaluated numerically
+        #b[1] is the actual burst value in terms of the ADVdata index
+        #I.E. If bursts 3,4,6,10,12 were being evaluated:
+        #b[0] = 0,1,2,3,4
+        #b[1] = 3,4,6,10,12
+        
+        print('Burst #'+str(b[0]+1)+' of '+str(len(burstList)))
 
-        #Calculate PSD of both pressure time series, segment averaging the spectra via a specified segment length and filter window
-        #All time series of pressure are linearly detrended to account for tidal effects
-        FpRaw, SpRaw = welch(pressureRaw, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
-        FpPa, SpPa = welch(pressurePascal, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
-        Fw, Sw = welch(burstW, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
-        Fu, Su = welch(burstU, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
-        Fv, Sv = welch(burstV, fs = fs, nperseg = nperseg, window=window, detrend = 'linear')
+        #Calculate mean current speed and its standard deviation for the burst
+        CSPD_arr[b[0]] = burstCSPD[b[0]].mean()
+        CSPDstd_arr[b[0]] = burstCSPD[b[0]].std()
 
-        #Convert spectra to radian frequency, but keep unconverted
-        SpRawOmega = SpRaw / (2*np.pi)
-        Sp_arr[b[0]] = SpRawOmega
-
-        SpPaOmega = SpPa / (2*np.pi)
-
-        SwOmega = Sw / (2*np.pi)
-        Sw_arr[b[0]] = SwOmega
-
-        SuOmega = Su / (2*np.pi)
-        Su_arr[b[0]] = SuOmega
-
-        SvOmega = Sv / (2*np.pi)
-        Sv_arr[b[0]] = SvOmega
-
-        #wavedisp function uses period (from frequency) and water depth (h) to calculate omega, k, and phase speed of waves
-        #Convert frequency to radian frequency and wavenumber
-
-        Rho = TEMPdata.Rho.sel(time = slice(pressureRaw.time[0],pressureRaw.time[-1])).mean()
+        #Generate aspectrum of radian frequency (omega) and wavenumber (k)
+        Rho = TEMPdata.Rho.sel(time = slice(burstTime[0][0],burstTime[0][-1])).mean() #Mean density during the burst
         if Rho.isnull()==True:
             try:
                 Rho = Rho_arr[b[0]-1]
@@ -1552,33 +1657,41 @@ def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window=
                 Rho_arr[b[0]] = Rho
         else:
             Rho_arr[b[0]] = Rho.values
+
+        #wavedisp function uses period (from frequency) and water depth (h) to calculate omega, k, and phase speed of waves
+        #Convert frequency to radian frequency and wavenumber
         g = -9.8 # Gravity
-        z = (pressurePascal/(Rho*g)) - ZpOffset #Depth (m): the recorded pressure converted to meters of seawater
-        Z_arr[b[0]] = z.mean().values
+        z = (burstPPascal[b[0]]/(Rho.values*g)) - ZpOffset #Depth (m): the recorded pressure converted to meters of seawater
+        Z_arr[b[0]] = z.mean() #Mean z is recorded in a seperate array
         H = np.mean(-z) #Sea level height (m): mean pressure detected by the pressure sensor plus the height of sensor from the bottom
         Zp = np.mean(z + ZpOffset) #Depth of pressure sensor (m)
         Zv = np.mean(z + ZvOffset) #Depth of velocity sensor (m): Sea level height plus the height of the velocity transducers from the bottom
-        T = 1/FpRaw #Period from previously calculate frequency
 
-        #Calculate radian frequency and wavenumber
+        #Calculate radian frequency and wavenumber using wavedisp function
         omega,k,Cph,Cg = wavedisp(T, H)
 
-        #Using linear wave theory to find gravity wave vertical velocity spectrum and wave height spectrum
-        #Converting raw pressure spectrum to sea level spectrum (Jones and Monosmith, 2008)
+        #Use linear wave theory to convert pressure spectra to vertical velocity and sea level spectra
+        #Sea level spectra is calculated using methods from Jones and Monosmith (2007)
 
-        #Find the cutoff frequency of the spectrum
-        fnIDX = np.where(FpRaw <=pressureFn)[0][-1] #The array indices where the noise floor begins in the spectrum
-        pNoisefloor = np.mean(SpRawOmega[fnIDX:]) #Average magnitude of noise floor
+        #Locate the noisefloor of the pressure spectra
+        fnIDX = np.where(FpRaw <=pNoisefloorFreq)[0][-1] #The array indices where the noise floor begins in the RAW pressure spectrum
+        pNoisefloor = np.mean(SpRawOmega[b[0]][fnIDX:]) #Average magnitude of noise floor
+
+        #Record the pressure noisefloor magnitude in seperate array
         pNoisefloor_arr[b[0]] = pNoisefloor
 
-        fp = omega[np.where(SpRawOmega == np.nanmax(SpRawOmega[:fnIDX]))[0][0]] #The peak frequency of the raw pressure spectrum
-        fcIDX = np.where((omega[:fnIDX] > (fp * fpFactor)) & (SpRawOmega[:fnIDX] > (pNoisefloor*fnFactor)))[0][-1] #The array indices of the final cutoff frequency
-        Fc_arr[b[0]] = fcIDX
+        #Now find the gravity wave cutoff frequency as specific by Jones and Monosmith (2007)
+        fp = omega[np.where(SpRawOmega[b[0]] == np.nanmax(SpRawOmega[b[0]][:fnIDX]))[0][0]] #The peak frequency of the raw pressure spectrum
+        fcIDX = np.where((omega[:fnIDX] > (fp * fpFactor)) & (SpRawOmega[b[0]][:fnIDX] > (pNoisefloor*fnFactor)))[0][-1] #The array indices of the final cutoff frequency
+        Fc_arr[b[0]] = int(fcIDX)
 
-        #Converting the spectrum
+        #Converting the pressure spectrum using linear wave theory
         Kp = np.empty(len(k))
         p_prime = np.empty(len(omega))
         w_prime = np.empty(len(omega))
+        
+        #Using wavenumber from the wavedisp function, the wave dispersion equations can be used
+        #to determine scaling factors for converting the pressure spectra at depth
         for i in enumerate(k):
             Kp[i[0]] = (np.cosh(i[1]*(Zp+H))/np.cosh(i[1]*H))**2
             p_prime[i[0]] = (Rho*(-g))*(np.cosh(i[1]*(Zp+H))/np.cosh(i[1]*H))
@@ -1586,64 +1699,397 @@ def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window=
 
         #Scale factor for converting pressure spectra (pascals) to vertical velocity spectra
         scaleFactor = w_prime**2 / p_prime**2
-        SwPrime = SpPaOmega * scaleFactor
+        SwPrime = SpPaOmega[b[0]] * scaleFactor
+        
+        #Use conversion equation to estimate sea level spectrum
+        Sn = (SpRawOmega[b[0]]/Kp) 
 
-        Sn = (SpRawOmega/Kp) #Use conversion equation to estimate sea level spectrum
-
-        #Calculate the omega^-4 model tail of spectrum
+        #Since pressure spectra hits a noise floor early in the spectrum, a model
+        #tail can be formed using an omega^-4 slope for a more complete spectrum
+        
+        #Calculate the omega^-4 model tail for the sea level spectra
         SnWavetail = (Sn[fcIDX]/(omega[fcIDX]**(wtSlope)))*(omega**(wtSlope))
+
+        #Convert the wavetail to the raw pressure spectrum
         SpWavetail = SnWavetail*Kp
+
+        #Convert wavetail to Sw'w' spectra as well
         SwPrimeWavetail = ((SnWavetail*Kp)*1e8) * scaleFactor
 
-        #Determine where the f-4 model should end by using the noise floor of the vertical velocity
-        velFnIDX = np.where(omega == (velocityFn*(2*np.pi)))[0][0]  #Position of the noise frequency in the omega array
-        vNoisefloor = np.mean(SwOmega[velFnIDX:]) #Noise floor of the vertical velocity spectrum
+        #Determine where the model wavetail should end by using the noise floor of the vertical velocity spectra
+        velFnIDX = np.where(omega == (vNoisefloorFreq*(2*np.pi)))[0][0]  #Frequency of where the velocity noise floor starts in the omega array
+        vNoisefloor = np.mean(SwOmega[b[0]][velFnIDX:]) #Magnitude of vertical velocity spectra noisefloor
+
+        #Record the vertical velocity noisefloor magnitude in seperate array
         vNoisefloor_arr[b[0]] = vNoisefloor
-        
+
+        #Define the wavetail cutoff as the frequency where the wavetail goes below the vertical velocity noise floor
         try:
             wavetailCutoff = np.where((SwPrimeWavetail <= vNoisefloor)&(omega>fp))[0][1] #Where the tail should end
         except:
             wavetailCutoff = np.where(omega==np.pi)[0][0] #If wavetail runs into error, just use conservative
                                                           #cutoff of pi rad/s (.5 Hz)
-        wtCutoff_arr[b[0]] = wavetailCutoff
 
-        #Make a seperate modelled spectrum with the wavetail
-        SpModel = np.empty(len(SpRawOmega))*np.nan
-        SpModel[:fcIDX+1] = SpRawOmega[:fcIDX+1]
-        SpModel[fcIDX:wavetailCutoff+1] = SpWavetail[fcIDX:wavetailCutoff+1]
+        #Record the omega array indices for the wavetail cutoff
+        wtCutoff_arr[b[0]] = int(wavetailCutoff)
+
+        #Make seperate modelled spectra that include the wavetail
+        SpModel = np.empty(len(SpRawOmega[b[0]]))*np.nan #Initialize empty "model" array for pressure spectra
+        SpModel[:fcIDX+1] = SpRawOmega[b[0]][:fcIDX+1] #Fill model up to the surface wave cutoff frequency with the normal spectra
+        SpModel[fcIDX:wavetailCutoff+1] = SpWavetail[fcIDX:wavetailCutoff+1] #Fill the model with the wavetail after the wave cutoff      frequency and go until the wavetail cutoff frequency
+        #Record the model pressure spectra in seperate array 
         SpModel_arr[b[0]] = SpModel
 
+        #Do the same process for the sea level spectra (Snn)
         SnModel = np.empty(len(Sn))*np.nan
         SnModel[:fcIDX+1] = Sn[:fcIDX+1]
         SnModel[fcIDX:wavetailCutoff+1] = SnWavetail[fcIDX:wavetailCutoff+1]
         Sn_arr[b[0]] = SnModel
 
+        #And vertical velocity from pressure spectra (Sw'w')
         SwPrimeModel = np.empty(len(SwPrime))*np.nan
         SwPrimeModel[:fcIDX+1] = SwPrime[:fcIDX+1]
         SwPrimeModel[fcIDX:wavetailCutoff+1] = SwPrimeWavetail[fcIDX:wavetailCutoff+1]
         SwPrime_arr[b[0]] = SwPrimeModel
 
-        #Calculate wave height and period
-        m0 = np.trapz((omega[1:wavetailCutoff+1]**0)*SnModel[1:wavetailCutoff+1])
-        m2 = np.trapz((omega[1:wavetailCutoff+1]**2)*SnModel[1:wavetailCutoff+1])
+        #Calculate wave height and period using moment integrals from Jones and Monosmith (2007)
+        m0 = np.trapz((omega[1:wavetailCutoff+1]**0)*SnModel[1:wavetailCutoff+1], omega[1:wavetailCutoff+1])
+        m2 = np.trapz((omega[1:wavetailCutoff+1]**2)*SnModel[1:wavetailCutoff+1], omega[1:wavetailCutoff+1])
 
-        Hrms_arr[b[0]] = 2*np.sqrt(2*m0)
-        Hs_arr[b[0]] = 4 * np.sqrt(m0)
-        Tavg_arr[b[0]] = (2*np.pi) * np.sqrt(m0/m2)
-        Tpeak_arr[b[0]] = 1/(omega[np.where(SnModel==np.nanmax(SnModel))[0][0]]/(2*np.pi))
-        waveOrbital_arr[b[0]] = oc.ubwave(Hs_arr[b[0]], Tavg_arr[b[0]], H)
+        Hrms_arr[b[0]] = 2*np.sqrt(2*m0) #Root mean square wave height
+        Hs_arr[b[0]] = 4 * np.sqrt(m0)   #Significant wave height
+        Tavg_arr[b[0]] = (2*np.pi) * np.sqrt(m0/m2) #Average wave period
+        Tpeak_arr[b[0]] = 1/(omega[np.where(SnModel==np.nanmax(SnModel))[0][0]]/(2*np.pi)) #Peak wave period
+        waveOrbital_arr[b[0]] = oc.ubwave(Hs_arr[b[0]], Tavg_arr[b[0]], H) #Estimate wave orbital velocity at depth "H"
+        
+        #Using some of the wave parameters and the modelled spectra, turbulent dissipation can be estimated
+        #First the inertial subrange (ISR) must be identified
+        
+        #Starting boundaries are the end of the surface wave band and the beginning of the noise floor
+        lfc = int(wavetailCutoff)-2 #Generally where the gravity wave band begins to diverge from vertical velocity
+        ufc = velFnIDX #Where the velocity noise floor starts
 
-    # Create a new dataset with all relevant variables and epsilon values
+        #Initialize an array of all frequency combinations within lfc and ufc
+        startRange = np.arange(lfc, ufc) 
+        bounds = [] #List of all ISR boundaries
+        if (ufc-lfc) > minGap:
+            #Create an array that is offset by the minimum gap
+            iteratorRange = np.arange(lfc+minGap, ufc) #First combination of points will be lfc : lfc + 1Hz gap
+
+            for i in range(ufc-(lfc+minGap)):
+                for j in range(len(iteratorRange)):
+                    #For each combination, record the boundaries into a list
+                    bounds.append((startRange[i], iteratorRange[j]))
+
+                #Each iteration shortens iterator range by 1 to prevent repeat and backwards combinations 
+                iteratorRange = iteratorRange[1:ufc] 
+
+        # If the range is shorter than the minimum gap, boundaries become the wave cutoff frequency and the noise floor
+        else:
+            bounds.append((lfc, ufc))
+
+        #Initialize arrays for curve fitting
+        testMinSw = np.empty(len(bounds))
+        testHighBound = np.empty(len(bounds))
+        testMinFit = np.empty(len(bounds))
+        testInt = np.empty(len(bounds))
+        testIntErr = np.empty(len(bounds))
+        testMu = np.empty(len(bounds))
+        testMuErr = np.empty(len(bounds))
+        muDiff = np.empty(len(bounds))
+        testEpsMag = np.empty(len(bounds))
+        testEpsErr = np.empty(len(bounds))
+        testEpsFitInt = np.empty(len(bounds))
+        testEpsFitSlope = np.empty(len(bounds))
+        testEpsFitR2val = np.empty(len(bounds))
+        testEpsFitPval = np.empty(len(bounds))
+        testEpsFitSlopeErr = np.empty(len(bounds))
+        testEpsFitIntErr = np.empty(len(bounds))
+        testKolInt = np.empty(len(bounds))
+        testKolIntErr = np.empty(len(bounds))
+        testFitMisfit = np.empty(len(bounds))
+        epsList = list()
+
+        #Estimate Turbulent Kinetic energy dissipation rate (epsilon)
+
+        #Test all combinations of ISR ranges and store the results
+        for i in np.arange(0,len(bounds)):
+            try:
+                #Generate power law fit using the current set of bounds
+                #Scipy.curve_fit finds the best fit parameters using least squares error
+                pars, cov = curve_fit(f=power_law, xdata=omega[bounds[i][0]:bounds[i][1]],
+                                          ydata=SwOmega[b[0]][bounds[i][0]:bounds[i][1]], p0=[0, 0], bounds=(-np.inf, np.inf), maxfev=10000)
+
+                #Using the same concept, use the boundaries to fit a power law with fixed -5/3 slope
+                #to represent Kolmogorov's law
+                pars2, cov2 = curve_fit(f=kol_law, xdata=omega[bounds[i][0]:bounds[i][1]],
+                                        ydata=SwOmega[b[0]][bounds[i][0]:bounds[i][1]], maxfev=10000)
+
+                #Calculate the misfit between the dynamic fit and Kolmogorov's law using the mean square error
+                muFit = pars[0] * (omega[bounds[i][0]:bounds[i][1]]**pars[1])
+                testMinFit[i] = muFit[-1] #The magnitude of the fit at the high boundary
+                kolFit = pars2[0] * (omega[bounds[i][0]:bounds[i][1]]**(-5/3))
+                muDiff[i] = np.abs(pars[1]+(5/3)) #Misfit of the slope compared to -5/3
+
+                testMinSw[i] = SwOmega[b[0]][bounds[i][0]] #Spectra at lower boundary
+
+                #Record all of the relevant variables for ISR and epsilon quality control 
+                testInt[i] = pars[0] #Fit intercept
+                testIntErr[i] = np.sqrt(np.diag(cov))[0] #intercept error to 90% confidence level
+                testMu[i] = pars[1] #Fit slope
+                testMuErr[i] = np.sqrt(np.diag(cov))[1] #Slope error to 90% confidence level
+
+                testKolInt[i] = pars2[0] #Intercept from -5/3 fit
+                testKolIntErr[i] = np.sqrt(np.diag(cov2))[0] #Intercept error from -5/3 fit to 90% confidence level
+                
+                ### INITIAL ESTIMATE ###
+                #Estimate turbulent dissipation (Epsilon/eps)
+                highBound = bounds[i][1]
+                testHighBound[i] = bounds[i][1]
+                isrOmega = omega[bounds[i][0]:highBound]    #Frequency range of the proposed ISR
+                S33 = SwOmega[b[0]][bounds[i][0]:highBound] #Vertical velocity spectra within ISR
+
+                #Dissipation formula (Eq. A14 from Gerbi et al., 2009)
+                eps = ((S33 * (isrOmega**(5/3)))/(alpha * J33[b[0]]))**(3/2) #Returns array of eps estimates across ISR
+                
+                testFitMisfit[i] = np.sum((kolFit-S33)**2)/(len(S33)-1)  #Mean SE between spectrum and -5/3 fit
+
+                #Fit a linear regression to eps estimates
+                res = stats.linregress(isrOmega, eps)
+                
+                testEpsMag[i] = np.mean(eps) #Mean value of eps for the entire burst
+                testEpsErr[i] = np.sqrt(np.var(eps)/(len(eps)-1)) #Calculate error of the epsilon measurements from variance about the mean
+                                                                  #Method from Feddersen (2010)
+                testEpsFitInt[i] = res.intercept #Linear regression intercept
+                testEpsFitSlope[i] = res.slope #Linear regression slope
+                testEpsFitR2val[i] = res.rvalue**2 #R2 value of linear regression
+                testEpsFitPval[i] = res.pvalue #P-value of linear regression (used for qc)
+                testEpsFitSlopeErr[i] = res.stderr #Error of linear regression slope
+                testEpsFitIntErr[i] = res.intercept_stderr #Error of linear regression intercept
+                epsList.append(eps)
+
+            #If curve_fit can't find a proper best fit line, populate test arrays with 99999 as error values
+            except:
+                testMinSw[i] = 99999
+                testInt[i] = 99999
+                testIntErr[i] = 99999
+                testMu[i] = 99999
+                muDiff[i] = 99999
+                testMuErr[i] = 99999
+                testEpsMag[i] = 99999
+                testEpsErr[i] = 99999
+                testEpsFitInt[i] = 99999
+                testEpsFitSlope[i] = 99999
+                testEpsFitR2val[i] = 99999
+                testEpsFitPval[i] = 99999
+                testEpsFitSlopeErr[i] = 99999
+                testEpsFitIntErr[i] = 99999
+                testKolInt[i] = 99999
+                testKolIntErr[i] = 99999
+                testFitMisfit[i] = 99999
+
+        #Using all ISR and epsilon estimates from this burst, run them all through a series of
+        #quality control tests to determine which frequency ranges and epsilon values are potentially valid
+
+        #Noise floor test from Gerbi et al. (2009) requires that Sww/2 at 2pi is > the noisefloor
+        #Gerbi fits to a fixed range of 2pi-10pi, which can go below the noise floor, whereas this study uses a dynamic range
+        #To try an mimic Gerbi's noise floor test, we reject any fits that dip below the noise floor
+        noiseFlag = xr.where((testMinFit > vNoisefloor), 0, 1)
+        noiseFlagSum = np.where(noiseFlag==0)[0]
+        if len(noiseFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan;epsKDE[b[0]] = np.nan;
+            validFits[b[0]] = 0;validLB[b[0]] = np.nan;validUB[b[0]] = np.nan
+            print('Failed noise floor test')
+            continue
+
+        #Curve fit intercept test from Jones and Monosmith (2008)
+        #Magnitude of dissipation must be greater than the error of the -5/3 fit intercept
+        intFlag = xr.where(testEpsMag > testKolIntErr, 0, 1)
+        intFlagSum = np.where(intFlag==0)[0]
+        if len(intFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan;epsKDE[b[0]] = np.nan;
+            validFits[b[0]] = 0;validLB[b[0]] = np.nan;validUB[b[0]] = np.nan
+            print('Failed intercept test')
+            continue
+
+        #Spectra fit slope test from Feddersen (2010)
+        #The dynamic slope fit must be within an acceptable range of -5/3
+        lowMu = testMu - (2*testMuErr) - .06
+        highMu = testMu + (2*testMuErr) + .06
+        slopeFlag = xr.where((lowMu < (-5/3)) & (highMu > (-5/3)), 0, 1)
+        slopeFlagSum = np.where(slopeFlag==0)[0]
+        if len(slopeFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan;epsKDE[b[0]] = np.nan;
+            validFits[b[0]] = 0;validLB[b[0]] = np.nan;validUB[b[0]] = np.nan
+            print('Failed Feddersen slope test')
+            continue
+
+        #Spectra slope test from Wheeler and Giddings (2023)
+        #Uses the error of the fitted slope and difference between -5/3 to check  
+        #if it's within the 97.5th percentile of a standard normal distribution
+        normSlopeFlag = xr.where((muDiff/testMuErr) < 1.960, 0, 1)
+        normSlopeFlagSum = np.where(normSlopeFlag==0)[0]
+        if len(normSlopeFlagSum)==0:
+            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
+            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
+            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
+            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
+            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan;epsKDE[b[0]] = np.nan;
+            validFits[b[0]] = 0;validLB[b[0]] = np.nan;validUB[b[0]] = np.nan
+            print('Failed W&G slope test')
+            continue
+
+        #Epsilon linear regression test from Feddersen (2010)
+        #Uses a linear regression between omega and epsilon to check 
+        #that the slope is indistinguishable from 0
+        linRegFlag = xr.where(testEpsFitPval >= .05, 0, 1)
+
+        flagSum = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag + linRegFlag) == 0)[0] 
+
+        #Linear Regression slope test eliminates a lot of data which may have good eps estimate
+        #but a very tiny non-zero slope that is near negligible but with significant p-value
+        #If a data burst passes the test, it should be prioritized over other bursts, but too many
+        #bursts get rejected if the test is universally applied
+        #This if statement ensures that more bursts will pass, and the lin reg test can be applied
+        #in post-analysis and modified if need be
+        if len(flagSum) == 0:
+            finalFlag = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag) == 0)[0]
+        else:
+            finalFlag = flagSum
+
+        #If there are still no valid fits even without linReg test, burst fails and is nanned
+        if len(finalFlag) == 0:
+            minSw[b[0]] = np.nan
+            isrLower[b[0]] = np.nan
+            maxSw[b[0]] = np.nan 
+            isrUpper[b[0]] = np.nan
+            Int[b[0]] = np.nan 
+            IntErr[b[0]] = np.nan 
+            Mu[b[0]] = np.nan 
+            MuErr[b[0]] = np.nan 
+            KolInt[b[0]] = np.nan 
+            KolIntErr[b[0]] = np.nan 
+            FitMisfit[b[0]] = np.nan
+            epsMag[b[0]] = np.nan
+            epsErr[b[0]] = np.nan
+            epsFitInt[b[0]] = np.nan 
+            epsFitSlope[b[0]] = np.nan
+            epsFitR2val[b[0]] = np.nan
+            epsFitPval[b[0]] = np.nan
+            epsFitSlopeErr[b[0]] = np.nan
+            epsFitIntErr[b[0]] = np.nan
+            epsKDE[b[0]] = np.nan
+            validFits[b[0]] = 0
+            validLB[b[0]] = np.nan
+            validUB[b[0]] = np.nan
+            #LenOz[b[0]] = np.nan
+            #LenKol[b[0]] = np.nan
+            print('No valid fits')
+            continue
+
+        #Using all of the ISR and epsilon estimates that pass the tests
+        #the best fit ISR is chosen by the smallest least squares error 
+        #of the -5/3 fit from the spectrum itself (Jones and Monosmith, 2008)
+        bestFit = finalFlag[testFitMisfit[finalFlag].argmin()] #Returns the index value of the best fit line
+
+        #Populate final arrays with each variable pertaining to the "bestFit" index
+        minSw[b[0]] = SwOmega[b[0]][bounds[bestFit][0]]
+        isrLower[b[0]] = bounds[bestFit][0]
+        maxSw[b[0]] = SwOmega[b[0]][int(testHighBound[bestFit])]
+        isrUpper[b[0]] = int(testHighBound[bestFit])
+
+        #All variables relevant from fitting power curves
+        Int[b[0]] = testInt[bestFit] 
+        IntErr[b[0]] = testIntErr[bestFit] 
+        Mu[b[0]] = testMu[bestFit] 
+        MuErr[b[0]] = testMuErr[bestFit] 
+        KolInt[b[0]] = testKolInt[bestFit] 
+        KolIntErr[b[0]] = testKolIntErr[bestFit] 
+        FitMisfit[b[0]] = testFitMisfit[bestFit]
+
+        #All variables pertaining to epsilon 
+        epsMag[b[0]] = testEpsMag[bestFit]
+        epsErr[b[0]] = testEpsErr[bestFit]
+        epsFitInt[b[0]] = testEpsFitInt[bestFit] 
+        epsFitSlope[b[0]] = testEpsFitSlope[bestFit]
+        epsFitR2val[b[0]] = testEpsFitR2val[bestFit]
+        epsFitPval[b[0]] = testEpsFitPval[bestFit] 
+        epsFitSlopeErr[b[0]] = testEpsFitSlopeErr[bestFit]
+        epsFitIntErr[b[0]] = testEpsFitIntErr[bestFit]
+
+        #Gaussian kde epsilon estimate
+        finalEpsList = np.array(())
+        for ind in finalFlag:
+            finalEpsList = np.append(finalEpsList,epsList[ind])
+        gkde_obj = stats.gaussian_kde(finalEpsList)
+        x_pts = np.linspace(finalEpsList.min(), finalEpsList.max(), len(finalFlag))
+        estimated_pdf = gkde_obj.evaluate(x_pts)
+        testEpsKDE = x_pts[estimated_pdf.argmax()]
+        epsKDE[b[0]] = finalEpsList[np.abs(finalEpsList-testEpsKDE).argmin()]
+        
+        #Final variables to track estimation parameters
+        validFits[b[0]] = len(finalFlag)
+        finalBounds = np.array(bounds)[finalFlag]
+        validLB[b[0]] = finalBounds[:,0].min()
+        finalLB = finalBounds[:,0].min()
+        validUB[b[0]] = finalBounds[:,1].max()
+        finalUB = finalBounds[:,1].max()
+
+        #Calculate the R-ratio for unity between horizontal and vertical spectra
+        #A psuedo-test for evaluating isotropic turbulence assumption
+        Suv = (SuOmega[b[0]]+SvOmega[b[0]])/2
+        SuvNF = Suv[ufc:].mean() #Noisefloor of horizontal velocity
+        SuvUB = np.where(Suv<=SuvNF)[0][0] #The frequency array indices where the noisefloor starts
+
+        a = 12/21 #Constant term used in the R-unity ratio equation from Feddersen (2010)
+
+        #If the noise floor frequency in Suv is higher than the highest ISR frequency
+        #continue with R-ratio calculation as normal
+        if SuvUB >= finalUB:
+            omegaR = omega[finalLB:finalUB]**(5/3)
+            SuvR = Suv[finalLB:finalUB]
+            SwwR = SwOmega[b[0]][finalLB:finalUB]
+            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
+            
+        elif ((SuvUB<finalUB)&(SuvUB>=finalLB)):
+            omegaR = omega[finalLB:SuvUB]**(5/3)
+            SuvR = Suv[finalLB:SuvUB]
+            SwwR = SwOmega[b[0]][finalLB:SuvUB]
+            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
+            
+        elif (SuvUB<finalLB):
+            R_ratio[b[0]] = np.nan
+        else:
+            R_ratio[b[0]] = np.nan
+        
+        print(testEpsFitPval[bestFit],len(finalFlag),int(testHighBound[bestFit])-bounds[bestFit][0])
+
+        #END OF THE LOOP
+
+    #Create a new dataset with all relevant variables and epsilon values
     print('Creating Dataset')
     spectraDS = xr.Dataset(
         data_vars=dict(
-            Suu = (["time_start","omega"], Su_arr,
+            BurstCounter = (["time_start"], BurstCounter),
+            Suu = (["time_start","omega"], SuOmega,
                    {'Description':'Primary velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
-            Svv = (["time_start","omega"], Sv_arr,
+            Svv = (["time_start","omega"], SvOmega,
                   {'Description':'Secondary velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
-            Sww = (["time_start","omega"], Sw_arr,
+            Sww = (["time_start","omega"], SwOmega,
                   {'Description':'Vertical velocity spectra','Units':'[m/s]^2 * [rad/s]^-1'}),
-            Spp = (["time_start","omega"], Sp_arr,
+            Spp = (["time_start","omega"], SpRawOmega,
                   {'Description':'Pressure spectra from ADV head','Units':'[dBar]^2 * [rad/s]^-1'}),
             SppModel = (["time_start","omega"], SpModel_arr,
                        {'Description':'Pressure spectra with an f^-4 tail','Units':'[dBar]^2 * [rad/s]^-1'}),
@@ -1656,9 +2102,9 @@ def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window=
                                  {'Description':'Magnitude of noisefloor for pressure spectrum','Units':'[dBar]^2 * [rad/s]^-1'}),
             VelocityNoisefloor = (["time_start"], vNoisefloor_arr,
                                  {'Description':'Magnitude of noisefloor for vertical velocity spectrum','Units':'[m/s]^2 * [rad/s]^-1'}),
-            WavetailStart = (["time_start"], Fc_arr,
+            WavetailStart = (["time_start"], Fc_arr.astype(int),
                             {'Description':'Start of the f^-4 model','Units':'omega array index'}),
-            WavetailEnd = (["time_start"], wtCutoff_arr,
+            WavetailEnd = (["time_start"], wtCutoff_arr.astype(int),
                           {'Description':'End of the f^-4 model','Units':'omega array index'}),
             Rho = (["time_start"], Rho_arr,
                   {'Description':'Average density of water column','Units':'[Kg/m^3]'}),
@@ -1692,14 +2138,48 @@ def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window=
                            {'Description':'Ratio of bad data:total data for secondary velocity'}),
             UpOrigRatio = (["time_start"], UpOrigRatio,
                           {'Description':'Ratio of bad data:total data for vertical velocity'}),
-            BurstCounter = (["time_start"], BurstCounter)
-        ),
+            MaxISRMag = (["time_start"], maxSw,{'Description':'Vertical velocity spectra at the maximum ISR frequency',
+                                                'Units':'[m/s]^2 * [rad/s]^-1'}),
+            MinISRMag = (["time_start"], minSw,{'Description':'Vertical velocity spectra at the minimum ISR frequency',
+                                                'Units':'[m/s]^2 * [rad/s]^-1'}),
+            LowBound = (["time_start"], isrLower,{'Description':'Index number of the lower ISR boundary in omega array based on best fit',
+                                                          'Units':'omega array index'}),
+            HighBound = (["time_start"], isrUpper,{'Description':'Index number of the upper ISR boundary in omega array based on best fit',
+                                                           'Units':'omega array index'}),
+            Int = (["time_start"], Int,{'Description':'Intercept of ISR power curve fit',
+                                        'Units':'[m/s]^2 * [rad/s]^-1'}),
+            IntErr = (["time_start"], IntErr,{'Description':'Error of the power curve intercept'}),
+            Mu = (["time_start"], Mu,{'Description':'Slope of ISR power curve fit'}),
+            MuErr = (["time_start"], MuErr,{'Description':'Error of the power curve slope'}),
+            KolFitInt = (["time_start"], KolInt,{'Description':'Intercept of Kolmogorov law',
+                                                 'Units':'[m/s]^2 * [rad/s]^-1'}),
+            KolFitIntErr = (["time_start"], KolIntErr,{'Description':'Error of Kolmogorov law intercept'}),
+            ISRMisfit = (["time_start"], FitMisfit,{'Description':'Mean square error between ISR power curve and Kolmogorov law'}),
+            eps = (["time_start"], epsMag,{'Description':'Turbulent kinetic energy dissipation rate',
+                                           'Units':'[m^2/s^3]'}),
+            epsErr = (["time_start"], epsErr,{'Description':'Error in epsilon estimate',
+                                              'Units':'[m^2/s^3]'}),
+            epsLRInt = (["time_start"], epsFitInt,{'Description':'Intercept of epsilon linear regression'}),
+            epsLRIntErr = (["time_start"], epsFitIntErr,{'Description':'Intercept error of epsilon linear regression'}),
+            epsLRSlope = (["time_start"], epsFitSlope,{'Description':'Slope of epsilon linear regression'}),
+            epsLRSlopeErr = (["time_start"], epsFitSlopeErr,{'Description':'Slope error of epsilon linear regression'}),
+            epsLRR2val = (["time_start"], epsFitR2val,{'Description':'R-squared value of epsilon linear regression'}),
+            epsLRPval = (["time_start"], epsFitPval,{'Description':'P-value of epsilon linear regression'}),
+            epsKDE = (["time_start"], epsKDE,{'Description':'Turbulent kinetic energy dissipation rate',
+                                           'Units':'[m^2/s^3]'}),
+            ValidFits = (["time_start"], validFits,{'Description':'Number of ISR fits that pass all qc tests'}),
+            ValidLB = (["time_start"], validLB,{'Description':'Lowest valid frequency of the ISR'}),
+            ValidUB = (["time_start"], validUB,{'Description':'Highest valid frequency of the ISR'}),
+
+            R_ratio = (['time_start'],R_ratio,{'Description':'The unity between the horizontal and vertical spectra'})
+            ),
         coords=dict(
             time_start=(["time_start"], TimeStart),
             omega=(["omega"], omega),
         ),
         attrs=dict(Description="Velocity and pressure spectra with estimated wave variables")
     )
+
     #Add Metadata to dataset and variables
     spectraDS.attrs['Sampling rate (Hz)'] = ADVds.attrs['Sampling rate']
     spectraDS.attrs['Samples per burst'] = ADVds.attrs['Samples per burst']
@@ -1711,962 +2191,8 @@ def ADV_spectraDS(ADVdata, TEMPdata, selBurstNumbers=None, segLength=60, window=
     spectraDS.attrs['Velocity noise frequency (radian frequency)'] = velocityFn * (2*np.pi)
     spectraDS.attrs['Noisefloor factor'] = fnFactor
     spectraDS.attrs['Wavepeak factor'] = fpFactor
-    
+    spectraDS.attrs['Minimum ISR gap (radian frequency)'] = minGap*np.diff(omega)[0]
+
     return spectraDS
 
-#===============================================================================================================================
-def power_law(x, a, b):
-    return a*np.power(x, b)
-
-#===============================================================================================================================
-def kol_law(x,a):
-    return a*np.power(x,(-5/3))
-
-#================================================================================================================================
-def EpsCalc_from_SpectraDS(SPECdata, TEMPdata, minimumGap=1, noiseFrequency = None):
-
-    #Make a copy of the dataset to prevent accidental modification of original data
-    SPECds = SPECdata.copy(deep=True)
-    TEMPds = TEMPdata.copy(deep=True)
-
-    omega = SPECds.omega.values
-
-    #Calculate a minimum gap in terms of the frequency index
-    minGap = int((minimumGap*2*np.pi)/np.diff(omega)[0])
-    
-    Sw = SPECds.Sww.values
-    J33 = SPECds.J33.values
-
-    burstList = np.unique(SPECds.BurstCounter)
-
-    #Convert noise floor to radian frequency
-    if noiseFrequency:
-        fNoise = noiseFrequency
-        ufc = np.where(omega == fNoise)[0][0]
-        Noisefloor = np.empty(len(burstList))
-        for n in enumerate(Sw):
-            Noisefloor[n[0]] = np.mean(n[1][ufc:])
-    else:
-        fNoise = SPECds.attrs['Velocity noise frequency (radian frequency)']
-        ufc = np.where(omega == fNoise)[0][0] #Minimum frequency before the noise floor begins (upper ISR boundary
-        Noisefloor = SPECds.VelocityNoisefloor.values #Magnitude of noise floor
-
-    #Initialize arrays to hold all variables generated by the dataset
-    isrUpper = np.empty(len(burstList)) #Upper boundary of inertial subrange (ISR)
-    isrLower = np.empty(len(burstList)) #Lower boundary of ISR
-    Mu = np.empty(len(burstList)) #Slope of ISR fit
-    MuErr = np.empty(len(burstList)) #Error of slope
-    Int = np.empty(len(burstList)) #Intercept of ISR fit
-    IntErr = np.empty(len(burstList)) #Error of slope
-    KolInt = np.empty(len(burstList)) #Intercept of -5/3 fit
-    KolIntErr = np.empty(len(burstList)) #Error of -5/3 intercept
-    FitMisfit = np.empty(len(burstList)) #Misfit between ISR slope and -5/3
-    maxSw = np.empty(len(burstList)) 
-    minSw = np.empty(len(burstList))
-
-
-    #Initialize arrays to hold all dissipation estimates and eps variables
-    epsMag = np.empty(len(burstList)) #Mean of eps values over isr
-    epsErr = np.empty(len(burstList)) #Error in eps estimate
-    epsFitInt = np.empty(len(burstList)) # Intercept of eps estimate linear regression (LR) model
-    epsFitSlope = np.empty(len(burstList)) #LR Slope
-    epsFitR2val = np.empty(len(burstList)) #LR R2-value
-    epsFitPval = np.empty(len(burstList)) #LR P-value
-    epsFitSlopeErr = np.empty(len(burstList)) #Error of LR slope
-    epsFitIntErr = np.empty(len(burstList)) #Error of LR intercept
-    R_ratio = np.empty(len(burstList))
-
-    #Initialize array to hold Ozmidov and Komogorov length scale values once eps has been estimated
-    #LenOz = np.empty(len(burstList))
-    #LenKol = np.empty(len(burstList))
-
-    #Begin calculating epsilon for each of the specified bursts
-    for b in enumerate(burstList):
-        print('Evaluating burst '+str(b[0]+1)+' of '+str(len(burstList)))
-
-        #Identify burst number to be evaluated
-        burstNumber = b[1]
-        #Generate list of every possible boundary combination within lower and upper cutoff frequencies
-
-        lfc = int(SPECds.WavetailStart.values[b[0]]) #Where the gravity wave band ends
-
-        #Initialize an array of all frequencies within lfc and ufc
-        startRange = np.arange(lfc, ufc) 
-        bounds = [] #List of all ISR boundaries
-        if (ufc-lfc) > minGap:
-            #Create an array that is offset by the minimum gap
-            iteratorRange = np.arange(lfc+minGap, ufc) #First combination of points will be lfc : lfc + 1Hz gap
-
-            for i in range(ufc-(lfc+minGap)):
-                for j in range(len(iteratorRange)):
-                    #For each combination, record the boundaries into a list
-                    bounds.append((startRange[i], iteratorRange[j]))
-
-                #Each iteration shortens iterator range by 1 to prevent repeat and backwards combinations 
-                iteratorRange = iteratorRange[1:ufc] 
-
-        # If the range is shorter than the minimum gap, boundaries become the wave cutoff frequency and the noise floor
-        else:
-            bounds.append((lfc, ufc))
-
-        #Initialize arrays for curve fitting
-        testMinSw = np.empty(len(bounds))
-        testInt = np.empty(len(bounds))
-        testIntErr = np.empty(len(bounds))
-        testMu = np.empty(len(bounds))
-        testMuErr = np.empty(len(bounds))
-        muDiff = np.empty(len(bounds))
-        testEpsMag = np.empty(len(bounds))
-        testEpsErr = np.empty(len(bounds))
-        testEpsFitInt = np.empty(len(bounds))
-        testEpsFitSlope = np.empty(len(bounds))
-        testEpsFitR2val = np.empty(len(bounds))
-        testEpsFitPval = np.empty(len(bounds))
-        testEpsFitSlopeErr = np.empty(len(bounds))
-        testEpsFitIntErr = np.empty(len(bounds))
-        testKolInt = np.empty(len(bounds))
-        testKolIntErr = np.empty(len(bounds))
-        testFitMisfit = np.empty(len(bounds))
-
-        #Constants for estimating epsilon
-        alpha = 1.5 # Kolomogorov constant
-
-        #Go through the list of all combinations of ISR ranges and store the results
-        for i in np.arange(0,len(bounds)):
-            try:
-                #Generate power law fit using the next set of boundaries
-                pars, cov = curve_fit(f=power_law, xdata=omega[bounds[i][0]:bounds[i][1]],
-                                          ydata=Sw[b[0]][bounds[i][0]:bounds[i][1]], p0=[0, 0], bounds=(-np.inf, np.inf), maxfev=10000)
-                #Fit power curve with fixed -5/3 slope
-                pars2, cov2 = curve_fit(f=kol_law, xdata=omega[bounds[i][0]:bounds[i][1]],
-                                        ydata=Sw[b[0]][bounds[i][0]:bounds[i][1]], maxfev=10000)
-
-                muFit = pars[0] * (omega[bounds[i][0]:bounds[i][1]]**pars[1])
-                kolFit = pars2[0] * (omega[bounds[i][0]:bounds[i][1]]**(-5/3))
-
-                testMinSw[i] = Sw[b[0]][bounds[i][0]] #Spectra at lower boundary
-                testInt[i] = pars[0] #Fit intercept
-                testIntErr[i] = np.sqrt(np.diag(cov))[0] #intercept error to 90% confidence level
-                testMu[i] = pars[1] #Fit slope
-                testMuErr[i] = np.sqrt(np.diag(cov))[1] #Slope error to 90% confidence level
-
-                testKolInt[i] = pars2[0] #Intercept from -5/3 fit
-                testKolIntErr[i] = np.sqrt(np.diag(cov2))[0] #Intercept error from -5/3 fit to 90% confidence level
-
-                muDiff[i] = np.abs(pars[1]+(5/3)) #Misfit of the slope compared to -5/3
-                testFitMisfit[i] = np.square(np.subtract(muFit, kolFit)).mean()  #Mean square error between dynamic fit and -5/3 fit
-
-                #Estimate turbulent dissipation (Epsilon/eps)
-                isrOmega = omega[bounds[i][0]:bounds[i][1]] #Radian frequency range
-                S33 = Sw[b[0]][bounds[i][0]:bounds[i][1]] #Vertical velocity spectra within ISR
-
-                #Dissipation formula (Eq. A14 from Gerbi et al., 2009)
-                eps = ((S33 * (isrOmega**(5/3)))/(alpha * J33[b[0]]))**(3/2) #Returns array of eps estimates across ISR
-
-                #Fit a linear regression to eps estimates
-                res = stats.linregress(isrOmega, eps)
-
-                #Populate arrays
-                testEpsMag[i] = np.mean(eps) #Mean value of eps for the entire burst
-                testEpsErr[i] = np.sqrt(np.var(eps)/(len(eps)-1)) #Calculate error of the epsilon measurements from variance about the mean
-                                                                  #Method from Feddersen (2010)
-                testEpsFitInt[i] = res.intercept #Linear regression intercept
-                testEpsFitSlope[i] = res.slope #Linear regression slope
-                testEpsFitR2val[i] = res.rvalue**2 #R2 value of linear regression
-                testEpsFitPval[i] = res.pvalue #P-value of linear regression (used for qc)
-                testEpsFitSlopeErr[i] = res.stderr #Error of linear regression slope
-                testEpsFitIntErr[i] = res.intercept_stderr #Error of linear regression intercept
-
-            #If curve_fit can't fit properly, use 99999 as error values
-            except:
-                testMinSw[i] = 99999
-                testInt[i] = 99999
-                testIntErr[i] = 99999
-                testMu[i] = 99999
-                muDiff[i] = 99999
-                testMuErr[i] = 99999
-                testEpsMag[i] = 99999
-                testEpsErr[i] = 99999
-                testEpsFitInt[i] = 99999
-                testEpsFitSlope[i] = 99999
-                testEpsFitR2val[i] = 99999
-                testEpsFitPval[i] = 99999
-                testEpsFitSlopeErr[i] = 99999
-                testEpsFitIntErr[i] = 99999
-                testKolInt[i] = 99999
-                testKolIntErr[i] = 99999
-                testFitMisfit[i] = 99999
-
-        #Noise floor test from Gerbi et al. (2009)
-        noiseFlag = xr.where(testMinSw/2 > Noisefloor[b[0]], 0, 1)
-        noiseFlagSum = np.where(noiseFlag==0)[0]
-        if len(noiseFlagSum)==0:
-            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
-            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
-            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
-            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
-            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
-            print('Failed noisefloor test')
-            continue
-            
-        #Curve fit intercept test from Jones and Monosmith (2008)
-        intFlag = xr.where(testEpsMag > testIntErr, 0, 1)
-        intFlagSum = np.where(intFlag==0)[0]
-        if len(intFlagSum)==0:
-            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
-            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
-            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
-            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
-            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
-            print('Failed intercept test')
-            continue
-
-        #Spectra fit slope test from Feddersen (2010)
-        lowMu = testMu - (2*testMuErr) - .06
-        highMu = testMu + (2*testMuErr) + .06
-        slopeFlag = xr.where((lowMu < (-5/3)) & (highMu > (-5/3)), 0, 1)
-        slopeFlagSum = np.where(slopeFlag==0)[0]
-        if len(slopeFlagSum)==0:
-            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
-            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
-            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
-            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
-            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
-            print('Failed Feddersen slope test')
-            continue
-            
-        #Spectra slope test from Wheeler and Giddings (2023)
-        normSlopeFlag = xr.where((muDiff/testMuErr) < 1.960, 0, 1)
-        normSlopeFlagSum = np.where(normSlopeFlag==0)[0]
-        if len(normSlopeFlagSum)==0:
-            minSw[b[0]] = np.nan;isrLower[b[0]] = np.nan;maxSw[b[0]] = np.nan; isrUpper[b[0]] = np.nan;
-            Int[b[0]] = np.nan;IntErr[b[0]] = np.nan; Mu[b[0]] = np.nan; MuErr[b[0]] = np.nan;
-            KolInt[b[0]] = np.nan; KolIntErr[b[0]] = np.nan; FitMisfit[b[0]] = np.nan;epsMag[b[0]] = np.nan;
-            epsErr[b[0]] = np.nan;epsFitInt[b[0]] = np.nan; epsFitSlope[b[0]] = np.nan;epsFitR2val[b[0]] = np.nan;
-            epsFitPval[b[0]] = np.nan;epsFitSlopeErr[b[0]] = np.nan;epsFitIntErr[b[0]] = np.nan
-            print('Failed W&G slope test')
-            continue
-            
-        #Epsilon linear regression test from Feddersen (2010)
-        linRegFlag = xr.where(testEpsFitPval > .01, 0, 1)
-
-        flagSum = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag + linRegFlag) == 0)[0] 
-
-        #Linear Regression slope test eliminates a lot of data which may have good eps estimate
-        #but a very tiny non-zero slope that is near negligible but with significant p-value
-        #If a data burst passes the test, it should be prioritized over other bursts, but too many
-        #bursts get rejected if the test is universally applied
-        #This if statement ensures that more bursts will pass, and the lin reg test can be applied
-        #in post-analysis and modified if need be
-        if len(flagSum) == 0:
-            finalFlag = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag) == 0)[0]
-        else:
-            finalFlag = flagSum
-
-        #If there are still no valid fits even without linReg test, burst fails and is nanned
-        if len(finalFlag) == 0:
-            minSw[b[0]] = np.nan
-            isrLower[b[0]] = np.nan
-            maxSw[b[0]] = np.nan 
-            isrUpper[b[0]] = np.nan
-            Int[b[0]] = np.nan 
-            IntErr[b[0]] = np.nan 
-            Mu[b[0]] = np.nan 
-            MuErr[b[0]] = np.nan 
-            KolInt[b[0]] = np.nan 
-            KolIntErr[b[0]] = np.nan 
-            FitMisfit[b[0]] = np.nan
-            epsMag[b[0]] = np.nan
-            epsErr[b[0]] = np.nan
-            epsFitInt[b[0]] = np.nan 
-            epsFitSlope[b[0]] = np.nan
-            epsFitR2val[b[0]] = np.nan
-            epsFitPval[b[0]] = np.nan
-            epsFitSlopeErr[b[0]] = np.nan
-            epsFitIntErr[b[0]] = np.nan
-            #LenOz[b[0]] = np.nan
-            #LenKol[b[0]] = np.nan
-            print('No valid fits')
-            continue
-
-        #If the burst passes, choose the fit with the lowest misfit from -5/3 fit
-        bestFit = finalFlag[testFitMisfit[finalFlag].argmin()]
-
-        minSw[b[0]] = Sw[b[0]][bounds[bestFit][0]]
-        isrLower[b[0]] = bounds[bestFit][0]
-        maxSw[b[0]] = Sw[b[0]][bounds[bestFit][1]] 
-        isrUpper[b[0]] = bounds[bestFit][1]
-
-        #All variables relevant from fitting power curves
-        Int[b[0]] = testInt[bestFit] 
-        IntErr[b[0]] = testIntErr[bestFit] 
-        Mu[b[0]] = testMu[bestFit] 
-        MuErr[b[0]] = testMuErr[bestFit] 
-        KolInt[b[0]] = testKolInt[bestFit] 
-        KolIntErr[b[0]] = testKolIntErr[bestFit] 
-        FitMisfit[b[0]] = testFitMisfit[bestFit]
-
-        #All variables pertaining to epsilon 
-        epsMag[b[0]] = testEpsMag[bestFit]
-        epsErr[b[0]] = testEpsErr[bestFit]
-        epsFitInt[b[0]] = testEpsFitInt[bestFit] 
-        epsFitSlope[b[0]] = testEpsFitSlope[bestFit]
-        epsFitR2val[b[0]] = testEpsFitR2val[bestFit]
-        epsFitPval[b[0]] = testEpsFitPval[bestFit] 
-        epsFitSlopeErr[b[0]] = testEpsFitSlopeErr[bestFit]
-        epsFitIntErr[b[0]] = testEpsFitIntErr[bestFit]
-
-        #Ozmidov length scale
-        #rho1 = tempData.Rho.sel(depth=4,time=slice(burstTime[0],burstTime[-1])).mean().values #Depths 4 and 6 correspond to 9.1 and 9.7m respectively
-        #rho2 = tempData.Rho.sel(depth=6,time=slice(burstTime[0],burstTime[-1])).mean().values
-        #dRho = np.abs(rho2 - rho1)/.6 #Change in density over depth
-        #rhoBar = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Mean density during the burst
-        #g = 9.81 #Gravity
-        #N = np.sqrt((g/rhoBar)*dRho) #Buoyancy frequency
-        #LenOz[b[0]] = np.sqrt(epsMag[b[0]]/N**3)
-
-        #Calculate the Kolmogorov length scale                       
-        #nuTemp = burstTemp.mean().values+273.15
-        #nuPress = burstPressure.mean().values/100 + 0.101325
-        #nu = iapws95.IAPWS95_PT(nuPress,nuTemp).nu
-        #LenKol[b[0]] = ((nu**3)/epsMag[b[0]])**.25
-
-    epsDS = SPECds.copy(deep=True)
-
-    #Add Metadata to dataset and variables
-    epsDS.attrs['Minimum ISR gap (radian frequency)'] = minGap*np.diff(omega)[0]
-
-    epsDS['MaxISRMag'] = (["time_start"], maxSw,{'Description':'Vertical velocity spectra at the maximum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
-    epsDS['MinISRMag'] = (["time_start"], minSw,{'Description':'Vertical velocity spectra at the minimum ISR frequency','Units':'[m/s]^2 * [rad/s]^-1'})
-
-    epsDS['lowBound'] = (["time_start"], isrLower,{'Description':'Index number of the lower ISR boundary in omega array',
-                                                  'Units':'omega array index'})
-    epsDS['highBound'] = (["time_start"], isrUpper,{'Description':'Index number of the upper ISR boundary in omega array',
-                                                   'Units':'omega array index'})
-    epsDS['Int'] = (["time_start"], Int,{'Description':'Intercept of ISR power curve fit','Units':'[m/s]^2 * [rad/s]^-1'})
-    epsDS['IntErr'] = (["time_start"], IntErr,{'Description':'Error of the power curve intercept'})
-    epsDS['Mu'] = (["time_start"], Mu,{'Description':'Slope of ISR power curve fit'})
-    epsDS['MuErr'] = (["time_start"], MuErr,{'Description':'Error of the power curve slope'})
-    epsDS['KolFitInt'] = (["time_start"], KolInt,{'Description':'Intercept of Kolmogorov law','Units':'[m/s]^2 * [rad/s]^-1'})
-    epsDS['KolFitIntErr'] = (["time_start"], KolIntErr,{'Description':'Error of Kolmogorov law intercept'})
-    epsDS['ISRMisfit'] = (["time_start"], FitMisfit,{'Description':'Mean square error between ISR power curve and Kolmogorov law'})
-
-    epsDS['eps'] = (["time_start"], epsMag,{'Description':'Turbulent kinetic energy dissipation rate','Units':'[m^2/s^3]'})
-    epsDS['epsErr'] = (["time_start"], epsErr,{'Description':'Error in epsilon estimate','Units':'[m^2/s^3]'}) 
-    epsDS['epsLRInt'] = (["time_start"], epsFitInt,{'Description':'Intercept of epsilon linear regression'})
-    epsDS['epsLRIntErr'] = (["time_start"], epsFitIntErr,{'Description':'Intercept error of epsilon linear regression'})
-    epsDS['epsLRSlope'] = (["time_start"], epsFitSlope,{'Description':'Slope of epsilon linear regression'})
-    epsDS['epsLRSlopeErr'] = (["time_start"], epsFitSlopeErr,{'Description':'Slope error of epsilon linear regression'})
-    epsDS['epsLRR2val'] = (["time_start"], epsFitR2val,{'Description':'R-squared value of epsilon linear regression'})
-    epsDS['epsLRPval'] = (["time_start"], epsFitPval,{'Description':'P-value of epsilon linear regression'})
-    
-    #Calculate the R-ratio for unity between horizontal and vertical spectra
-    Suv = (epsDS.Suu+epsDS.Svv)/2
-    a = 12/55
-    for b in enumerate(burstList):
-        SuvNF = Suv[b[0]][ufc:].mean() #210 is the index value of 3.5Hz noise frequency
-        SuvUB = np.where(Suv[b[0]]<=SuvNF)[0][0]
-        #If the noise floor frequency in Suv is higher than the highest ISR frequency
-        #continue with R-ratio calculation as normal
-        if SuvUB >= epsDS.highBound.values[b[0]]:
-            omegaR = epsDS.omega[int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
-            SuvR = Suv[b[0]][int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
-            SwwR = epsDS.Sww[b[0]][int(epsDS.lowBound.values[b[0]]):int(epsDS.highBound.values[b[0]])]
-            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
-        elif ((SuvUB<epsDS.highBound.values[b[0]]))&(SuvUB>=epsDS.lowBound.values[b[0]]):
-            omegaR = epsDS.omega[int(epsDS.lowBound.values[b[0]]):SuvUB]**(5/3)
-            SuvR = Suv[b[0]][int(epsDS.lowBound.values[b[0]]):SuvUB]
-            SwwR = epsDS.Sww[b[0]][int(epsDS.lowBound.values[b[0]]):SuvUB]
-            R_ratio[b[0]] = ((a * (omegaR*(SuvR-SuvNF)))/(omegaR*SwwR)).mean()
-        elif (SuvUB<epsDS.lowBound.values[b[0]]):
-            R_ratio[b[0]] = np.nan
-        else:
-            R_ratio[b[0]] = np.nan
-    epsDS['R_ratio'] = (['time_start'],R_ratio,{'Description':'The unity between the horizontal and vertical spectra'})
-
-
-    #L_Ozmidov = (["time_start"], LenOz,{'Description':'Slope of ISR power curve fit'})
-    #L_Kolmogorov = (["time_start"], LenKol,{'Description':'Slope of ISR power curve fit'})
-    #epsDS['L_Ozmidov'].attrs['Description'] = 'Ozmidov length scale'
-    #epsDS['L_Kolmogorov'].attrs['Description'] = 'Kolmogorov length scale'
-
-    return epsDS
-
-#================================================================================================================================
-def EpsCalc(vecDS, tempDS, badDataRatioCutoff, selBurstNumbers = None, nperseg=None, minimumGap=1, noiseFrequency = 3.1, ZpOffset = 0, ZvOffset = 0):
-
-    ds = vecDS.copy(deep=True)
-    tempData = tempDS.copy(deep=True)
-    fs = ds.attrs['Sampling rate']
-    if selBurstNumbers:
-        burstList = np.unique(selBurstNumbers)
-    else:
-        goodBursts = ds.burst.where(ds.dUp < badDataRatioCutoff, drop=True)
-        burstList = np.unique(goodBursts)
-
-    time_start = ds.time_start.where(ds.BurstCounter.isin(burstList), drop=True)
-
-    print('Initializing arrays')
-    #Initialize dimensions of frequency and spectrum using a burst from the dataset
-    testBurst = ds.Up.where((ds.BurstNum.isin(burstList[0])) & (ds.Up.isnull()==False), drop = True)
-    Ftest, Stest = welch(testBurst, fs=fs, nperseg= nperseg, window='hann') # Vertical velocity spectra
-
-    #Convert frequency to radian frequency and wavenumber
-    T = 1/Ftest
-    H = np.mean(ds.Pressure+ZpOffset)
-    omega,k,Cph,Cg = wavedisp(T, H)
-
-    J33 = ds.J33.where(ds.burst.isin(burstList), drop=True).values # Wavenumber space integral
-    dUp = ds.UpOrigRatio.where(ds.burst.isin(burstList), drop=True).values # Ratio of bad datapoints within the burst
-
-    #Calculate a minimum gap in terms of the frequency index returned by scipy.welch
-    minGap = int((minimumGap*2*np.pi)/np.diff(omega)[0])
-
-    #Convert noise floor to radian frequency
-    fNoise = noiseFrequency*2*np.pi
-    Fn = np.where(omega == fNoise)[0][0] #Minimum frequency before the noise floor begins
-
-    #Initialize arrays to hold all variables generated by the dataset
-    fullSw = np.empty((len(burstList),len(omega))) #Full spectrum of velocity components
-    fullSu = np.empty((len(burstList),len(omega)))
-    fullSv = np.empty((len(burstList),len(omega)))
-    fullSp = np.empty((len(burstList),len(omega))) #Converted pressure spectrum
-    isrUpper = np.empty(len(burstList)) #Upper boundary of inertial subrange (ISR)
-    isrLower = np.empty(len(burstList)) #Lower boundary of ISR
-    Mu = np.empty(len(burstList)) #Slope of ISR fit
-    MuErr = np.empty(len(burstList)) #Error of slope
-    Int = np.empty(len(burstList)) #Intercept of ISR fit
-    IntErr = np.empty(len(burstList)) #Error of slope
-    KolInt = np.empty(len(burstList)) #Intercept of -5/3 fit
-    KolIntErr = np.empty(len(burstList)) #Error of -5/3 intercept
-    FitMisfit = np.empty(len(burstList)) #Misfit between ISR slope and -5/3
-    maxSw = np.empty(len(burstList)) 
-    minSw = np.empty(len(burstList))
-    Noise = np.empty(len(burstList)) #Magnitude of noise floor
-    wavePeak = np.empty(len(burstList)) #Magnitude peak wave band frequency
-
-    #Initialize arrays to hold all dissipation estimates and eps variables
-    epsMag = np.empty(len(burstList)) #Mean of eps values over isr
-    epsErr = np.empty(len(burstList)) #Error in eps estimate
-    epsFitInt = np.empty(len(burstList)) # Intercept of eps estimate linear regression (LR) model
-    epsFitSlope = np.empty(len(burstList)) #LR Slope
-    epsFitR2val = np.empty(len(burstList)) #LR R2-value
-    epsFitPval = np.empty(len(burstList)) #LR P-value
-    epsFitSlopeErr = np.empty(len(burstList)) #Error of LR slope
-    epsFitIntErr = np.empty(len(burstList)) #Error of LR intercept
-
-    #Initialize array to hold Ozmidov and Komogorov length scale values once eps has been estimated
-    LenOz = np.empty(len(burstList))
-    LenKol = np.empty(len(burstList))
-
-    #Begin calculating epsilon for each of the specified bursts
-    for b in enumerate(burstList):
-        print('Evaluating burst '+str(b[0]+1)+' of '+str(len(burstList)))
-        
-        #Identify burst number to be evaluated
-        burstNumber = b[1]
-
-        #Retrieve variables from the burst time period
-        burstTime = ds.time.where(ds.BurstNum.isin(burstNumber), drop = True)
-        burstTemp = ds.Temperature.sel(time_sen=slice(burstTime[0],burstTime[-1])) #Temperature recorded at depth of adv head
-
-        burstUp = ds.Up.where((ds.BurstNum.isin(burstNumber)) & (ds.Up.isnull()==False), drop = True)
-        burstU = ds.Primary.where((ds.BurstNum.isin(burstNumber)) & (ds.Primary.isnull()==False), drop = True)
-        burstV = ds.Secondary.where((ds.BurstNum.isin(burstNumber)) & (ds.Secondary.isnull()==False), drop = True)
-
-        # Generate vertical and horizontal velocity spectra
-        Fw, Sw = welch(burstUp, fs=fs, nperseg= nperseg, window='hann', detrend = 'linear') # Vertical velocity spectra
-        Fu, Su = welch(burstU, fs=fs, nperseg= nperseg, window='hann', detrend = 'linear') # Horiztonal velocity spectra
-        Fv, Sv = welch(burstV, fs=fs, nperseg= nperseg, window='hann', detrend = 'linear')
-
-        #Convert spectra to radian frequency
-        SwOmega = Sw/(2*np.pi)
-        SuOmega = Su/(2*np.pi)
-        SvOmega = Sv/(2*np.pi)
-
-        # Calculate and convert pressure spectra to vertical velocity to find lower cutoff frequency
-        burstPressure = ds.Pressure.where(ds.BurstNum.isin(burstNumber), drop=True)
-        rho = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Density at adv during the burst
-
-        Fw_Prime, Sw_prime = sppConversion(burstPressure, rho, fs, nperseg, dBarToPascal = True, ZpOffset = ZpOffset, ZvOffset = ZvOffset, radianFrequency = True)
-
-        #Define the lower cutoff frequency as the end of surface gravity wave band
-        try:
-            lfc = argrelextrema(Sw_prime, np.less, order=10)[0][0]
-        except IndexError:
-            #Any issue with indexes should yield a default wave cutoff of .5 Hz
-            #.5 is a conservative estiamte of where the wave band ends, but still preceeds most of the potential ISR
-            lfc = np.where(Fw == .5)[0][0]
-
-        #Define the upper cutoff frequency as the beginning of the noise floor
-        noiseFloor = np.mean(SwOmega[Fn:]) #Noise floor magnitude of vertical velocity spectra
-        ufc = Fn
-
-        #Generate list of every possible boundary combination within lower and upper cutoff frequencies
-
-        #Initialize an array of all frequencies within lfc and ufc
-        startRange = np.arange(lfc, ufc) 
-        bounds = [] #List of all ISR boundaries
-        if (ufc-lfc) > minGap:
-            #Create an array that is offset by the minimum gap
-            iteratorRange = np.arange(lfc+minGap, ufc) #First combination of points will be lfc : lfc + 1Hz gap
-
-            for i in range(ufc-(lfc+minGap)):
-                for j in range(len(iteratorRange)):
-                    #For each combination, record the boundaries into a list
-                    bounds.append((startRange[i], iteratorRange[j]))
-
-                #Each iteration shortens iterator range by 1 to prevent repeat and backwards combinations 
-                iteratorRange = iteratorRange[1:ufc] 
-
-        # If the range is shorter than the minimum gap, boundaries become the wave cutoff frequency and the noise floor
-        else:
-            bounds.append((lfc, ufc))
-
-        #Initialize arrays for curve fitting
-        testMinSw = np.empty(len(bounds))
-        testInt = np.empty(len(bounds))
-        testIntErr = np.empty(len(bounds))
-        testMu = np.empty(len(bounds))
-        testMuErr = np.empty(len(bounds))
-        muDiff = np.empty(len(bounds))
-        testEpsMag = np.empty(len(bounds))
-        testEpsErr = np.empty(len(bounds))
-        testEpsFitInt = np.empty(len(bounds))
-        testEpsFitSlope = np.empty(len(bounds))
-        testEpsFitR2val = np.empty(len(bounds))
-        testEpsFitPval = np.empty(len(bounds))
-        testEpsFitSlopeErr = np.empty(len(bounds))
-        testEpsFitIntErr = np.empty(len(bounds))
-        testKolInt = np.empty(len(bounds))
-        testKolIntErr = np.empty(len(bounds))
-        testFitMisfit = np.empty(len(bounds))
-
-        #Constants for estimating epsilon
-        alpha = 1.5 # Kolomogorov constant
-        Jlm = J33[b[0]]
-
-        #Go through the list of all combinations of ISR ranges and store the results
-        for i in np.arange(0,len(bounds)):
-            try:
-                #Generate power law fit using the next set of boundaries
-                pars, cov = curve_fit(f=power_law, xdata=omega[bounds[i][0]:bounds[i][1]],
-                                          ydata=SwOmega[bounds[i][0]:bounds[i][1]], p0=[0, 0], bounds=(-np.inf, np.inf), maxfev=10000)
-                #Fit power curve with fixed -5/3 slope
-                pars2, cov2 = curve_fit(f=kol_law, xdata=omega[bounds[i][0]:bounds[i][1]],ydata=SwOmega[bounds[i][0]:bounds[i][1]], maxfev=10000)
-
-                muFit = pars[0] * (omega[bounds[i][0]:bounds[i][1]]**pars[1])
-                kolFit = pars2[0] * (omega[bounds[i][0]:bounds[i][1]]**(-5/3))
-
-                testMinSw[i] = SwOmega[bounds[i][0]] #Spectra at lower boundary
-                testInt[i] = pars[0] #Fit intercept
-                testIntErr[i] = np.sqrt(np.diag(cov))[0] #intercept error to 90% confidence level
-                testMu[i] = pars[1] #Fit slope
-                testMuErr[i] = np.sqrt(np.diag(cov))[1] #Slope error to 90% confidence level
-
-                testKolInt[i] = pars2[0] #Intercept from -5/3 fit
-                testKolIntErr[i] = np.sqrt(np.diag(cov2))[0] #Intercept error from -5/3 fit to 90% confidence level
-
-                muDiff[i] = np.abs(pars[1]+(5/3)) #Misfit of the slope compared to -5/3
-                testFitMisfit[i] = np.square(np.subtract(muFit, kolFit)).mean()  #Mean square error between dynamic fit and -5/3 fit
-
-                #Estimate turbulent dissipation (Epsilon/eps)
-                isrOmega = omega[bounds[i][0]:bounds[i][1]] #Radian frequency range
-                S33 = SwOmega[bounds[i][0]:bounds[i][1]] #Vertical velocity spectra within ISR
-
-                #Dissipation formula (Eq. A14 from Gerbi et al., 2009)
-                eps = ((S33 * (isrOmega**(5/3)))/(alpha * Jlm))**(3/2) #Returns array of eps estimates across ISR
-
-                #Fit a linear regression to eps estimates
-                res = stats.linregress(isrOmega, eps)
-
-                #Populate arrays
-                testEpsMag[i] = np.mean(eps) #Mean value of eps for the entire burst
-                testEpsErr[i] = np.sqrt(np.var(eps)/(len(eps)-1)) #Calculate error of the epsilon measurements from variance about the mean
-                                                                  #Method from Feddersen (2010)
-                testEpsFitInt[i] = res.intercept #Linear regression intercept
-                testEpsFitSlope[i] = res.slope #Linear regression slope
-                testEpsFitR2val[i] = res.rvalue**2 #R2 value of linear regression
-                testEpsFitPval[i] = res.pvalue #P-value of linear regression (used for qc)
-                testEpsFitSlopeErr[i] = res.stderr #Error of linear regression slope
-                testEpsFitIntErr[i] = res.intercept_stderr #Error of linear regression intercept
-
-            #If curve_fit can't fit properly, use 99999 as error values
-            except:
-                testMinSw[i] = 99999
-                testInt[i] = 99999
-                testIntErr[i] = 99999
-                testMu[i] = 99999
-                muDiff[i] = 99999
-                testMuErr[i] = 99999
-                testEpsMag[i] = 99999
-                testEpsErr[i] = 99999
-                testEpsFitInt[i] = 99999
-                testEpsFitSlope[i] = 99999
-                testEpsFitR2val[i] = 99999
-                testEpsFitPval[i] = 99999
-                testEpsFitSlopeErr[i] = 99999
-                testEpsFitIntErr[i] = 99999
-                testKolInt[i] = 99999
-                testKolIntErr[i] = 99999
-                testFitMisfit[i] = 99999
-
-        #Noise floor test from Gerbi et al. (2009)
-        noiseFlag = xr.where(testMinSw/2 > noiseFloor, 0, 1)
-
-        #Curve fit intercept test from Jones and Monosmith (2008)
-        intFlag = xr.where(testEpsMag > testIntErr, 0, 1)
-
-        #Spectra fit slope test from Feddersen (2010)
-        lowMu = testMu - (2*testMuErr) - .06
-        highMu = testMu + (2*testMuErr) + .06
-        slopeFlag = xr.where((lowMu < (-5/3)) & (highMu > (-5/3)), 0, 1)
-
-        #Spectra slope test from Wheeler and Giddings (2023)
-        normSlopeFlag = xr.where((muDiff/testMuErr) < 1.960, 0, 1)
-
-        #Epsilon linear regression test from Feddersen (2010)
-        linRegFlag = xr.where(testEpsFitPval > .01, 0, 1)
-
-        flagSum = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag + linRegFlag) == 0)[0] 
-
-        #Linear Regression slope test eliminates a lot of data which may have good eps estimate
-        #but a very tiny non-zero slope that is near negligible but with significant p-value
-        #If a data burst passes the test, it should be prioritized over other bursts, but too many
-        #bursts get rejected if the test is universally applied
-        #This if statement ensures that more bursts will pass, and the lin reg test can be applied
-        #in post-analysis and modified if need be
-        if len(flagSum) == 0:
-            finalFlag = np.where((noiseFlag + intFlag + slopeFlag + normSlopeFlag) == 0)[0]
-        else:
-            finalFlag = flagSum
-
-        #If there are still no valid fits even without linReg test, burst fails and is nanned
-        if len(finalFlag) == 0:
-            minSw[b[0]] = np.nan
-            isrLower[b[0]] = np.nan
-            maxSw[b[0]] = np.nan 
-            isrUpper[b[0]] = np.nan
-            Int[b[0]] = np.nan 
-            IntErr[b[0]] = np.nan 
-            Mu[b[0]] = np.nan 
-            MuErr[b[0]] = np.nan 
-            KolInt[b[0]] = np.nan 
-            KolIntErr[b[0]] = np.nan 
-            FitMisfit[b[0]] = np.nan
-            epsMag[b[0]] = np.nan
-            epsErr[b[0]] = np.nan
-            epsFitInt[b[0]] = np.nan 
-            epsFitSlope[b[0]] = np.nan
-            epsFitR2val[b[0]] = np.nan
-            epsFitPval[b[0]] = np.nan
-            epsFitSlopeErr[b[0]] = np.nan
-            epsFitIntErr[b[0]] = np.nan
-            LenOz[b[0]] = np.nan
-            LenKol[b[0]] = np.nan
-            print('No valid fits')
-            continue
-
-        #If the burst passes, choose the fit with the lowest misfit from -5/3 fit
-        bestFit = finalFlag[testFitMisfit[finalFlag].argmin()]
-
-        #Populate global arrays with the best fit range
-        fullSw[b[0]] = SwOmega #Full spectrum of velocity components
-        fullSu[b[0]] = SuOmega
-        fullSv[b[0]] = SvOmega
-        fullSp[b[0]] = Sw_prime
-        Noise[b[0]] = ufc
-        wavePeak[b[0]] = lfc
-        minSw[b[0]] = SwOmega[bounds[bestFit][0]]
-        isrLower[b[0]] = bounds[bestFit][0]
-        maxSw[b[0]] = SwOmega[bounds[bestFit][1]] 
-        isrUpper[b[0]] = bounds[bestFit][1]
-
-        #All variables relevant from fitting power curves
-        Int[b[0]] = testInt[bestFit] 
-        IntErr[b[0]] = testIntErr[bestFit] 
-        Mu[b[0]] = testMu[bestFit] 
-        MuErr[b[0]] = testMuErr[bestFit] 
-        KolInt[b[0]] = testKolInt[bestFit] 
-        KolIntErr[b[0]] = testKolIntErr[bestFit] 
-        FitMisfit[b[0]] = testFitMisfit[bestFit]
-
-        #All variables pertaining to epsilon 
-        epsMag[b[0]] = testEpsMag[bestFit]
-        epsErr[b[0]] = testEpsErr[bestFit]
-        epsFitInt[b[0]] = testEpsFitInt[bestFit] 
-        epsFitSlope[b[0]] = testEpsFitSlope[bestFit]
-        epsFitR2val[b[0]] = testEpsFitR2val[bestFit]
-        epsFitPval[b[0]] = testEpsFitPval[bestFit] 
-        epsFitSlopeErr[b[0]] = testEpsFitSlopeErr[bestFit]
-        epsFitIntErr[b[0]] = testEpsFitIntErr[bestFit]
-
-        #Ozmidov length scale
-        rho1 = tempData.Rho.sel(bindist=1,time=slice(burstTime[0],burstTime[-1])).mean().values
-        rho2 = tempData.Rho.sel(bindist=1.5,time=slice(burstTime[0],burstTime[-1])).mean().values
-        dRho = np.abs(rho2 - rho1)/.6 #Change in density over depth
-        rhoBar = tempData.Rho.sel(time=slice(burstTime[0],burstTime[-1])).mean().values #Mean density during the burst
-        g = 9.81 #Gravity
-        N = np.sqrt((g/rhoBar)*dRho) #Buoyancy frequency
-        LenOz[b[0]] = np.sqrt(epsMag[b[0]]/N**3)
-
-        #Calculate the Kolmogorov length scale                       
-        nuTemp = burstTemp.mean().values+273.15
-        nuPress = burstPressure.mean().values/100 + 0.101325
-        nu = iapws95.IAPWS95_PT(nuPress,nuTemp).nu
-        LenKol[b[0]] = ((nu**3)/epsMag[b[0]])**.25
-                                             
-    # Create a new dataset with all relevant variables and epsilon values
-    print('Creating Dataset')
-    epsDS = xr.Dataset(
-        data_vars=dict(
-            Su = (["bNum","omega"], fullSu),
-            Sv = (["bNum","omega"], fullSv),
-            Sw = (["bNum","omega"], fullSw),
-            Sp = (["bNum","omega"], fullSp),
-            NoiseFloor = (["bNum"], Noise),
-            WavePeak = (["bNum"], wavePeak),
-            maxSw = (["bNum"], maxSw),
-            minSw = (["bNum"], minSw),
-            lowBound = (['bNum'], isrLower),
-            highBound = (['bNum'], isrUpper),
-            Int = (["bNum"], Int),
-            IntErr = (["bNum"], IntErr),
-            Mu = (["bNum"], Mu),
-            MuErr = (["bNum"], MuErr),
-            KolFitInt = (["bNum"], KolInt),
-            KolFitIntErr = (["bNum"], KolIntErr),
-            ISRMisfit = (["bNum"], FitMisfit),
-            eps = (["bNum"], epsMag),
-            epsErr = (["bNum"], epsErr),
-            J33 = (["bNum"], J33),
-            epsLRInt = (["bNum"], epsFitInt),
-            epsLRSlope = (["bNum"], epsFitSlope),
-            epsLRR2val = (["bNum"], epsFitR2val),
-            epsLRPval = (["bNum"], epsFitPval),
-            epsLRSlopeErr = (["bNum"], epsFitSlopeErr),
-            epsLRIntErr = (["bNum"], epsFitIntErr),
-            L_Ozmidov = (['bNum'], LenOz),
-            L_Kolmogorov = (['bNum'], LenKol),
-            dUp = (['bNum'], dUp),
-            timeStart = (['bNum'], time_start.data)
-        ),
-        coords=dict(
-            bNum=(["bNum"], burstList.data),
-            omega=(["omega"], omega.data),
-            frequency=(["frequency"], Ftest.data),
-            wavenumber=(["wavenumber"], k.data)
-        ),
-        attrs=dict(Description="Turbulent dissipation estimates with associated variables")
-    )
-    #Add Metadata to dataset and variables
-    epsDS.attrs['Segment length (s)'] = nperseg/fs
-    epsDS.attrs['Minimum ISR gap (radian frequency)'] = minGap*np.diff(omega)[0]
-    epsDS.attrs['Noise frequency (radian frequency)'] = fNoise
-    epsDS.attrs['Bad data ratio cutoff'] = badDataRatioCutoff
-    epsDS.attrs['Pressure sensor height offset (m)'] = ZpOffset
-    epsDS.attrs['Velocity transducer height offset (m)'] = ZvOffset
-
-    epsDS['Su'].attrs['Description'] = 'Primary velocity spectra'
-    epsDS['Su'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['Sv'].attrs['Description'] = 'Secondary velocity spectra'
-    epsDS['Sv'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['Sw'].attrs['Description'] = 'Vertical velocity spectra'
-    epsDS['Sw'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['Sp'].attrs['Description'] = 'Pressure spectra converted to vertical velocity via linear wave theory'
-    epsDS['Sp'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    
-    epsDS['NoiseFloor'].attrs['Description'] = 'Index number where the noise floor is located in omega array'
-    epsDS['WavePeak'].attrs['Description'] = 'Index number where the peak wave spectra is detected in omega array'
-
-    epsDS['maxSw'].attrs['Description'] = 'Vertical velocity spectra at the maximum ISR frequency'
-    epsDS['maxSw'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['minSw'].attrs['Description'] = 'Vertical velocity spectra at the minimum ISR frequency'
-    epsDS['minSw'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    
-    epsDS['lowBound'].attrs['Description'] = 'Index number of the lower ISR boundary in omega array'
-    epsDS['highBound'].attrs['Description'] = 'Index number of the upper ISR boundary in omega array'
-
-    epsDS['Int'].attrs['Description'] = 'Intercept of ISR power curve fit'
-    epsDS['Int'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['IntErr'].attrs['Description'] = 'Error of the power curve intercept'
-    epsDS['Mu'].attrs['Description'] = 'Slope of ISR power curve fit'
-    epsDS['MuErr'].attrs['Description'] = 'Error of the power curve slope'
-    epsDS['KolFitInt'].attrs['Description'] = 'Intercept of -5/3 slope fit'
-    epsDS['KolFitInt'].attrs['Units'] = '[m/s]^2 * [rad/s]^-1'
-    epsDS['KolFitIntErr'].attrs['Description'] = 'Error of the -5/3 slope fit intercept'
-    epsDS['ISRMisfit'].attrs['Description'] = 'Mean square error between ISR power curve and -5/3 slope fits'
-    
-    epsDS['eps'].attrs['Description'] = 'Turbulent kinetic energy dissipation rate (epsilon)'
-    epsDS['eps'].attrs['Units'] = 'm^2/s^3'
-    epsDS['epsErr'].attrs['Description'] = 'Error in epsilon estimate'
-    epsDS['epsErr'].attrs['Units'] = 'm^2/s^3'
-    
-    epsDS['J33'].attrs['Description'] = 'Wavenumber integral of upward velocity component'
-    
-    epsDS['epsLRInt'].attrs['Description'] = 'Intercept of epsilon linear regression'
-    epsDS['epsLRIntErr'].attrs['Description'] = 'Intercept error of epsilon linear regression'
-    epsDS['epsLRSlope'].attrs['Description'] = 'Slope of epsilon linear regression'
-    epsDS['epsLRSlopeErr'].attrs['Description'] = 'Slope error of epsilon linear regression'
-    epsDS['epsLRR2val'].attrs['Description'] = 'R-squared value of epsilon linear regression'
-    epsDS['epsLRPval'].attrs['Description'] = 'P-value of epsilon linear regression'
-    
-    epsDS['L_Ozmidov'].attrs['Description'] = 'Ozmidov length scale'
-    epsDS['L_Kolmogorov'].attrs['Description'] = 'Kolmogorov length scale'
-    
-    epsDS['dUp'].attrs['Description'] = 'Ratio of bad data within burst'
-    epsDS['timeStart'].attrs['Description'] = 'Time that each burst begins with coordinates of bNum'
-
-    return epsDS
-
-#===============================================================================================================================
-#==================================================== PLOTTING FUNCTIONS =======================================================
-#===============================================================================================================================
-def vecEpsPlotter(vecDS, tempDS, epsDS, timeFrame = None, saveFig = False, filename = None, returnBnum = False):
-    
-    if timeFrame is not None:
-        tempDep = tempDS.sel(dict(time=slice(str(timeFrame[0]), str(timeFrame[-1])))).resample(time='20Min').mean()
-
-        vecDS = vecDS.sel(dict(time=slice(str(timeFrame[0]), str(timeFrame[-1]))))
-        gb = np.unique(vecDS.burst.where((vecDS.dPrimary < .25) & (vecDS.burst.isin(vecDS.BurstNum)), drop=True))
-        advDep = vecDS.Primary.where(vecDS.BurstNum.isin(gb)).resample(time='20Min').mean()
-        advDep = advDep.where(advDep.isnull()==False, drop=True)
-
-        epsDep = epsDS.sel(dict(bNum=slice(gb[0], gb[-1]))).dropna(dim="bNum", how = 'all')
-        epsDep = epsDep.where(epsDep.eps.isnull()==False, drop=True)
-    
-    else:
-        tempDep = tempDS.sel(dict(time=slice(epsDS.timeStart.values[0], epsDS.timeStart.values[-1]))).resample(time='20Min').mean()
-
-        gb = vecDS.burst.where(vecDS.dPrimary < .25, drop=True)
-        advDep = vecDS.Primary.where(vecDS.BurstNum.isin(np.unique(gb))).resample(time='20Min').mean()
-        advDep = advDep.where(advDep.isnull()==False, drop=True)
-
-        epsDep = epsDS.where(epsDS.eps.isnull()==False).dropna(dim="bNum", how="all")
-
-    #Initialize plot
-    plt.figure(figsize = (20,16))
-    
-    # TEMPERATURE
-    plt.subplot(311)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=0), 'r-', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=1), 'darkorange', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=2), 'y-', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=3), 'g-', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=4), 'indigo', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=5), 'b-', lw = 1)
-    plt.plot(tempDep.time, tempDep.Temperature.isel(depth=6), 'k-', lw = 1)
-
-    plt.ylabel("Temperature (Celsius)", fontsize=14)
-    plt.margins(x=.01)
-    plt.title('Temperature within SWC Kelp Forest Mooring')
-    plt.legend(['2m','4m','6m','8m','9.1m', '9.4m', '9.7m'], loc = 'upper left')
-    
-    # PRIMARY VELOCITY
-    plt.subplot(312)
-    plt.plot(advDep.time, advDep, '.-b', label = 'ADV-U (20-min average)')
-    plt.ylim(-.05,.05)
-    #plt.legend(loc = 'upper left')
-    plt.axhline(y=0, c='black', lw=2)
-    plt.margins(x=.01)
-    plt.ylabel('Velocity (m/s)', fontsize=14)
-    plt.title('Primary velocity 1m Above Seafloor')
-    
-    # TURBULENT DISSIPATION
-    plt.subplot(313)
-    plt.yscale("log")
-    plt.plot(epsDep.timeStart, epsDep.eps, '.-g', ms = 6, lw=1)
-    lowerCI = epsDep.eps - epsDep.epsErr
-    upperCI = epsDep.eps + epsDep.epsErr
-    plt.fill_between(epsDep.timeStart, lowerCI, upperCI, color='green', alpha=0.3)
-    plt.margins(x=.01)
-    plt.ylabel(r'$\epsilon$ $(\frac{m^{2}}{s^{3}})$', fontsize=20)
-    plt.xlabel('Date', fontsize=14)
-    plt.title('TKE Dissipation Rate')
-    
-    if saveFig:
-        plt.savefig(str(filename))
-    if returnBnum:
-        return np.unique(epsDep.bNum)
-        
-#======================================================================================================================================        
-#Plot a specific burst and fit
-def epsSpectraPlotter(epsData, burstNumber, saveFig = False, filename = None):
-
-    ds = epsData.copy(deep=True)
-    epsDS = ds.where(ds.bNum.isin(burstNumber), drop=True)
-
-    lb = int(epsDS.lowBound.values[0])
-    ub = int(epsDS.highBound.values[0])
-    wp = int(epsDS.WavePeak.values[0])
-
-    muFit = (epsDS.Int * epsDS.omega[lb:ub]**epsDS.Mu).values[0]
-    kolFit = (epsDS.KolFitInt * epsDS.omega[lb:ub]**(-5/3)).values[0]
-    Sp = epsDS.Sp.values[0][:wp]
-    epsPval = epsDS.epsLRPval.values
-
-    """if epsPval < .05:
-        print('Nonzero Slope')
-        ub2 = ub
-        while epsPval < .05:
-            ub2 = ub2 - 1
-            alpha = 1.5
-            Jlm = epsDS.J33.values[0]
-            isrOmega = epsDS.omega[lb:ub2] #Radian frequency range
-            S33 = epsDS.Sw.values[0][lb:ub2] #Vertical velocity spectra within ISR
-            eps = ((S33 * (isrOmega**(5/3)))/(alpha * Jlm))**(3/2) #Returns array of eps estimates across ISR
-            epsErr = np.sqrt(np.var(eps)/(len(eps)-1))
-            epsMag = np.mean(eps)
-            res = stats.linregress(isrOmega, eps)
-            epsLR = ((res.slope*isrOmega) + res.intercept)
-            epsPval = res.pvalue"""
-
-    #Epsilon constants
-    alpha = 1.5
-    Jlm = epsDS.J33.values[0]
-
-    #Estimate turbulent dissipation (Epsilon/eps)
-    isrOmega = epsDS.omega[lb:ub] #Radian frequency range
-    S33 = epsDS.Sw.values[0][lb:ub] #Vertical velocity spectra within ISR
-
-    #Dissipation formula (Eq. A14 from Gerbi et al., 2009)
-    eps = ((S33 * (isrOmega**(5/3)))/(alpha * Jlm))**(3/2) #Returns array of eps estimates across ISR
-    epsMag = epsDS.eps.values[0]
-    epsErr = np.sqrt(np.var(eps)/(len(eps)-1))
-
-    lowerCI = eps.values - epsDS.epsErr.values[0]
-    upperCI = eps.values + epsDS.epsErr.values[0]
-
-    res = stats.linregress(isrOmega, eps)
-    epsLR = ((res.slope*isrOmega) + res.intercept)
-
-    plt.figure(figsize=(20,15))
-
-    plt.subplot(211)
-    plt.title('Burst #'+str(burstNumber)+ r' ($\epsilon_\mu$= '+str(epsDS.Mu.values[0])+' +- '+
-             str(epsDS.MuErr.values[0])+')')
-    plt.xlabel(r'$\omega$ $[\frac{rad}{s}]$', fontsize = 15)
-    plt.ylabel(r'Sww $[\frac{m^{2}}{s^{4}}]$', fontsize = 15)
-
-    plt.loglog(epsDS.omega, epsDS.Sw.values[0], '-k', lw = 1, label = 'Sww')
-    plt.loglog(epsDS.omega[:wp], Sp, '-r', lw = 1, label = 'Gravity wave spectra')
-    plt.loglog(epsDS.omega[lb:ub], kolFit, '-g', label="-5/3 fit", lw = 3)
-    plt.loglog(epsDS.omega[lb:ub], muFit, '--y', label="Curve fit", lw = 2)
-    plt.legend()
-
-    plt.subplot(212)
-    plt.title('Burst #'+str(burstNumber)+ r' ($\epsilon$ = '+str(epsMag)+' +- '+
-             str(epsDS.epsErr.values[0])+')')
-    plt.xlabel(r'$\omega$ $[\frac{rad}{s}]$', fontsize = 15)
-    plt.ylabel(r'$\epsilon$ $(\frac{m^{2}}{s^{3}})$', fontsize=20)
-
-    plt.plot(isrOmega, eps, '.-k', label = r'$\epsilon$ estimates')
-    plt.fill_between(isrOmega, lowerCI, upperCI, color='gray', alpha=0.8)
-    plt.axhline(y = epsMag, color = 'b', ls = '--', label = r'$\epsilon$ magnitude')
-    plt.plot(isrOmega, epsLR.values, '-r', label = r'$\epsilon$ linear regression')
-    plt.margins(x=.01)
-    plt.legend(str(epsPval))
-    
-    if saveFig:
-        plt.savefig(str(filename))
     
