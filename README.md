@@ -16,3 +16,4 @@ Packages folder:
 - Buoy_tools is used for the M1 mooring and NBDC station 46042
 - senntinel_tools is used for the ADCP data
 - vector_tools is used for the ADV data
+- thesis_functions are for minor calculations that did not fit into the othher packages
